@@ -1,0 +1,26 @@
+{
+  "name": "lexven-antigravity-tracker",
+  "version": "1.0.0",
+  "description": "High-tech telemetry-driven employee dashboard with strict RBAC and autonomous task dispatching",
+  "type": "module",
+  "scripts": {
+    "server": "node server/server.js",
+    "client": "vite",
+    "dev": "concurrently \"node server/server.js\" \"vite\"",
+    "build": "vite build",
+    "start": "node server/server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "lucide-react": "^1.16.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.2",
+    "vite": "^6.0.7"
+  }
+}
