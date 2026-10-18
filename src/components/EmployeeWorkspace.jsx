@@ -4,16 +4,15 @@ import {
   Lock, 
   Unlock, 
   CheckCircle, 
+  CheckCircle2, 
   GitPullRequest, 
-  UploadCloud, 
+  Send, 
   ShieldCheck, 
-  AlertOctagon, 
-  Terminal, 
-  Send,
-  Zap,
-  Activity,
-  CheckCircle2,
-  AlertTriangle
+  AlertTriangle, 
+  AlertOctagon,
+  ArrowUpRight,
+  Terminal,
+  Activity
 } from 'lucide-react';
 
 export function EmployeeWorkspace({ currentUser, lastWsEvent }) {
@@ -89,7 +88,7 @@ export function EmployeeWorkspace({ currentUser, lastWsEvent }) {
       });
 
       // Fluctuate local telemetry keystrokes slightly for realism
-      setLocalKeystrokes(prev => Math.max(12, Math.min(95, prev + (Math.random() > 0.5 ? 2 : -2))));
+      setLocalKeystrokes(prev => Math.max(14, Math.min(92, prev + (Math.random() > 0.5 ? 2 : -2))));
     }, 1000);
 
     return () => clearInterval(interval);
@@ -177,136 +176,150 @@ export function EmployeeWorkspace({ currentUser, lastWsEvent }) {
   const isCompletedOrReview = currentTask?.status === 'review' || currentTask?.status === 'verified';
 
   return (
-    <div className="main-content" style={{ maxWidth: '1000px', margin: '0 auto' }}>
-      {/* ACTION 3: LOCKOUT OVERLAY MODAL IF CHECKPOINT REACHES 00:00 WITHOUT SUBMISSION */}
+    <div className="wrap workspace-container" style={{ paddingBottom: '80px' }}>
+      {/* ACTION 3: LOCKOUT OVERLAY MODAL */}
       {isLockedOut && (
-        <div className="lockout-overlay">
-          <div style={{ maxWidth: '580px', background: '#120508', border: '2px solid var(--accent-crimson)', borderRadius: '12px', padding: '36px', boxShadow: '0 0 50px rgba(255, 42, 85, 0.5)' }}>
-            <AlertOctagon size={64} color="var(--accent-crimson)" style={{ margin: '0 auto 16px' }} />
-            <h2 className="heading" style={{ fontSize: '24px', color: 'var(--accent-crimson)', fontWeight: '700', marginBottom: '8px' }}>
-              SPRINT LOCKOUT // BURST EXPIRED
-            </h2>
-            <p className="mono" style={{ fontSize: '13px', color: '#fda4af', marginBottom: '20px', lineHeight: '1.6' }}>
-              Action 3 Sentinel Triggered: The 90-minute Checkpoint Timer reached 00:00 without a verified Proof-of-Work submission. 
-              Local IDE credentials quarantined. Founder notification dispatched.
-            </p>
-            <div style={{ background: '#240a10', padding: '12px', borderRadius: '6px', fontSize: '11px', fontFamily: 'var(--font-mono)', color: '#fca5a5', marginBottom: '24px' }}>
-              <div>NODE: {currentUser.name} ({currentUser.device_mac_address})</div>
-              <div>TASK ID: {currentTask?.id || 'N/A'}</div>
-              <div>STATUS: HARD LOCKED - PENDING GOD-MODE REVIEW</div>
+        <div style={{
+          position: 'fixed',
+          top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(11, 11, 12, 0.75)',
+          backdropFilter: 'blur(8px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 999,
+          padding: '24px'
+        }}>
+          <div style={{
+            maxWidth: '520px',
+            width: '100%',
+            background: 'var(--bg)',
+            border: '1px solid var(--line)',
+            borderLeft: '5px solid var(--status-red)',
+            borderRadius: 'var(--radius)',
+            padding: '36px 32px',
+            boxShadow: '0 24px 48px -12px rgba(11, 11, 12, 0.25)'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '14px' }}>
+              <AlertOctagon size={28} style={{ color: 'var(--status-red)' }} />
+              <h2 className="serif" style={{ fontSize: '26px', color: 'var(--ink)' }}>
+                Sprint Lockout <span style={{ color: 'var(--status-red)', fontStyle: 'italic' }}>Engaged</span>
+              </h2>
             </div>
+            <p style={{ fontSize: '14px', color: 'var(--muted)', lineHeight: '1.6', marginBottom: '20px' }}>
+              The 90-minute checkpoint window elapsed before a verified Proof-of-Work submission was recorded. 
+              Engineering session quarantined for administrative review.
+            </p>
+
+            <div style={{ background: 'var(--card)', border: '1px solid var(--line)', borderRadius: '8px', padding: '14px 18px', fontSize: '12px', fontFamily: 'var(--font-mono)', color: 'var(--ink)', marginBottom: '24px' }}>
+              <div>Node: {currentUser.name}</div>
+              <div>MAC: {currentUser.device_mac_address}</div>
+              <div>Task: {currentTask?.id || 'N/A'}</div>
+            </div>
+
             <button 
-              className="btn btn-outline" 
-              style={{ borderColor: 'var(--border-active)' }}
+              className="btn btn-secondary"
               onClick={() => {
                 setIsLockedOut(false);
                 setSecondsRemaining(5400);
               }}
             >
-              Simulate Founder Override Unlock
+              Simulate Administrative Unlock
             </button>
           </div>
         </div>
       )}
 
-      {/* Scope Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-            <span className="badge badge-employee">SCOPED WORKSPACE NODE</span>
-            <span className="mono" style={{ fontSize: '11px', color: 'var(--text-dim)' }}>
-              NODE ID: {currentUser.id}
-            </span>
-          </div>
-          <h1 className="heading" style={{ fontSize: '22px', fontWeight: '700' }}>
-            Active Micro-Sprint Focused Terminal
-          </h1>
-        </div>
-
-        {/* Psychological Accountability & Status */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: '11px', color: 'var(--accent-green)', fontFamily: 'var(--font-mono)' }}>
-              ● DEVICE VERIFIED
-            </div>
-            <div style={{ fontSize: '10px', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>
-              MAC: {currentUser.device_mac_address}
-            </div>
-          </div>
-        </div>
+      {/* Editorial Page Hero */}
+      <div className="page-hero">
+        <div className="section-kicker">Scoped Engineering Node</div>
+        <h1 className="hero-title">
+          Focused sprint, <span className="accent">uninterrupted.</span>
+        </h1>
+        <p className="hero-subtitle">
+          Autonomous 90-minute burst sessions with verified cryptographic proof-of-work dispatch.
+        </p>
       </div>
 
-      {/* 1. THE CHECKPOINT TIMER WIDGET (Persistent 90-Minute Bursts) */}
-      <div className="timer-widget">
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-          <Clock size={16} color={secondsRemaining < 600 ? 'var(--accent-crimson)' : 'var(--accent-cyan)'} />
-          <span className="mono" style={{ fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-            90-Minute Checkpoint Countdown Burst
-          </span>
+      {/* 1. CHECKPOINT TIMER WIDGET */}
+      <div className="burst-timer-card">
+        <div>
+          <div className="specimen-label" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <Clock size={14} style={{ color: 'var(--accent-strong)' }} />
+            <span>90-Minute Checkpoint Burst</span>
+          </div>
+          <div className={`burst-timer-num ${secondsRemaining < 600 ? 'locked' : ''}`}>
+            {formatTime(secondsRemaining)}
+          </div>
+          <div style={{ marginTop: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {!isAcknowledged ? (
+              <span className="badge caution">
+                <span className="badge-dot"></span>
+                Timer Standby: Awaiting Acceptance
+              </span>
+            ) : isCompletedOrReview ? (
+              <span className="badge active">
+                <span className="badge-dot"></span>
+                Sprint Complete • PoW Registered
+              </span>
+            ) : (
+              <span className="badge active">
+                <span className="badge-dot"></span>
+                Active Sprint In Progress
+              </span>
+            )}
+          </div>
         </div>
 
-        <div className={`timer-digits ${secondsRemaining < 600 ? 'danger' : secondsRemaining < 1800 ? 'warning' : ''}`}>
-          {formatTime(secondsRemaining)}
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginTop: '12px' }}>
-          {!isAcknowledged ? (
-            <span className="mono" style={{ fontSize: '12px', color: 'var(--accent-amber)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <Lock size={13} /> TIMER LOCKED: AWAITING BRIEF ACCEPTANCE
-            </span>
-          ) : isCompletedOrReview ? (
-            <span className="mono" style={{ fontSize: '12px', color: 'var(--accent-green)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <CheckCircle2 size={13} /> SPRINT COMPLETED // PROOF REGISTERED
-            </span>
-          ) : (
-            <span className="mono" style={{ fontSize: '12px', color: 'var(--accent-cyan)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <Zap size={13} /> ACTIVE PACING SPRINT IN PROGRESS
-            </span>
-          )}
-
-          {/* Quick Demo button to test Action 3 Lockout without waiting 90 real minutes */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', alignItems: 'flex-end' }}>
           <button 
-            className="btn btn-outline"
-            style={{ fontSize: '11px', padding: '4px 10px', borderColor: 'var(--accent-crimson)', color: 'var(--accent-crimson)' }}
+            className="btn btn-secondary"
+            style={{ fontSize: '12px', padding: '6px 14px' }}
             onClick={handleTriggerLockout}
             title="Fast-forward timer to 00:00 to test Action 3 Lockout"
           >
-            ⚡ Test 00:00 Lockout (Action 3)
+            ⚡ Test 00:00 Lockout Trigger
           </button>
+          <span className="mono" style={{ fontSize: '11px', color: 'var(--muted-2)' }}>
+            Autoclose at 00:00 without PoW
+          </span>
         </div>
       </div>
 
       {currentTask ? (
         <>
-          {/* 2. CONTEXT BRIEF & ACKNOWLEDGMENT GATE */}
-          <div className="card" style={{ marginBottom: '24px', background: '#090d14' }}>
-            <div className="card-header">
-              <div className="card-title">
-                <Terminal size={16} color="var(--accent-cyan)" />
-                <span>Micro-Sprint Brief: {currentTask.title}</span>
+          {/* 2. DIRECTIVE BRIEF CARD */}
+          <div className="demo-shell" style={{ marginBottom: '28px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
+              <div>
+                <div className="section-kicker" style={{ marginBottom: '4px' }}>Task Directive</div>
+                <h3 className="serif" style={{ fontSize: '26px', color: 'var(--ink)' }}>
+                  {currentTask.title}
+                </h3>
               </div>
-              <span className={`badge ${currentTask.status === 'active' ? 'badge-active' : 'badge-warning'}`}>
-                STATUS: {currentTask.status.toUpperCase()}
+              <span className={`badge ${currentTask.status === 'active' ? 'active' : 'waiting'}`}>
+                <span className="badge-dot"></span>
+                {currentTask.status.toUpperCase()}
               </span>
             </div>
 
-            {/* Read-Only Context Brief Content */}
-            <div style={{ background: '#04060a', border: '1px solid var(--border-subtle)', borderRadius: '6px', padding: '16px', marginBottom: '16px' }}>
-              <div style={{ fontSize: '11px', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)', marginBottom: '8px' }}>
-                DIRECTIVE PAYLOAD & REQUIREMENTS:
+            {/* Read-Only Context Brief */}
+            <div style={{ background: 'var(--bg)', border: '1px solid var(--line)', borderRadius: '8px', padding: '18px 20px', marginBottom: '20px' }}>
+              <div className="specimen-label" style={{ fontSize: '10px', marginBottom: '8px' }}>
+                Requirements & Constraints Payload:
               </div>
-              <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: 'var(--font-mono)', fontSize: '13px', color: '#e2e8f0', lineHeight: '1.6' }}>
+              <p style={{ fontSize: '14px', color: 'var(--ink)', lineHeight: '1.65', whiteSpace: 'pre-wrap' }}>
                 {currentTask.brief_content}
-              </pre>
+              </p>
             </div>
 
-            {/* Acknowledgment Gate Button */}
+            {/* Acknowledgment Gate */}
             {!isAcknowledged ? (
-              <div style={{ background: 'rgba(255, 183, 3, 0.08)', border: '1px solid var(--accent-amber)', borderRadius: '6px', padding: '14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ background: 'var(--bg-warm)', border: '1px solid var(--line)', borderRadius: '8px', padding: '18px 22px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '14px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  <AlertTriangle size={18} color="var(--accent-amber)" />
-                  <span style={{ fontSize: '12px', color: '#fed7aa', fontFamily: 'var(--font-mono)' }}>
-                    Mandatory Acknowledgment: The 90-minute timer will start immediately upon acceptance.
+                  <AlertTriangle size={18} style={{ color: 'var(--accent-strong)' }} />
+                  <span style={{ fontSize: '13px', color: 'var(--ink)', fontWeight: '500' }}>
+                    Mandatory Acknowledgment: Checkpoint timer starts upon clicking accept.
                   </span>
                 </div>
                 <button 
@@ -315,80 +328,88 @@ export function EmployeeWorkspace({ currentUser, lastWsEvent }) {
                   id="btn-accept-brief"
                 >
                   <Unlock size={14} />
-                  I Understand & Accept
+                  <span>I Understand & Accept</span>
+                  <span className="arr" aria-hidden="true">
+                    <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 8L8 2M8 2H3.5M8 2V6.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+                  </span>
                 </button>
               </div>
             ) : (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', color: 'var(--accent-green)', fontFamily: 'var(--font-mono)' }}>
-                <CheckCircle size={15} />
-                Brief acknowledged. Real-time telemetry monitoring and 90-minute burst engaged.
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: 'var(--status-green)', fontWeight: '500' }}>
+                <CheckCircle size={16} />
+                <span>Brief acknowledged. Telemetry audit and 90-minute burst active.</span>
               </div>
             )}
           </div>
 
-          {/* 3. PROOF-OF-WORK TERMINAL */}
-          <div className="card" style={{ marginBottom: '24px' }}>
-            <div className="card-header">
-              <div className="card-title">
-                <GitPullRequest size={16} color="var(--accent-green)" />
-                <span>Proof-of-Work Terminal & Webhook Dispatch</span>
+          {/* 3. PROOF-OF-WORK FORM CARD */}
+          <div className="demo-shell">
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+              <div>
+                <div className="section-kicker" style={{ marginBottom: '4px' }}>Proof of Work</div>
+                <h3 className="serif" style={{ fontSize: '26px', color: 'var(--ink)' }}>
+                  Verification & Webhook Dispatch
+                </h3>
               </div>
-              <span className="mono" style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                WEBHOOK: {currentTask.proof_of_work_webhook}
+              <span className="mono" style={{ fontSize: '11px', color: 'var(--muted-2)' }}>
+                Webhook: {currentTask.proof_of_work_webhook}
               </span>
             </div>
 
             {submissionSuccess || isCompletedOrReview ? (
-              <div style={{ background: 'rgba(0, 255, 157, 0.08)', border: '1px solid var(--accent-green)', borderRadius: '6px', padding: '16px', textAlign: 'center' }}>
-                <CheckCircle2 size={32} color="var(--accent-green)" style={{ margin: '0 auto 8px' }} />
-                <h4 className="heading" style={{ fontSize: '16px', color: 'var(--accent-green)', marginBottom: '4px' }}>
-                  Proof-of-Work Verified & Webhook Fired
+              <div style={{ background: 'var(--accent-tint-2)', border: '1px solid rgba(95, 115, 72, 0.25)', borderRadius: '8px', padding: '24px', textAlign: 'center' }}>
+                <CheckCircle2 size={32} style={{ color: 'var(--accent-strong)', margin: '0 auto 8px' }} />
+                <h4 className="serif" style={{ fontSize: '22px', color: 'var(--ink)', marginBottom: '6px' }}>
+                  Proof-of-Work Registered Successfully
                 </h4>
-                <p className="mono" style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                <p style={{ fontSize: '14px', color: 'var(--muted)' }}>
                   Payload registered with backend sentinel. Health Score calibrated to 98/100.
                 </p>
               </div>
             ) : (
               <form onSubmit={handleSubmitProofOfWork}>
-                <div style={{ marginBottom: '14px' }}>
-                  <label style={{ display: 'block', fontSize: '11px', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)', marginBottom: '6px' }}>
-                    GITHUB PR LINK / COMMIT REPO:
+                <div style={{ marginBottom: '16px' }}>
+                  <label className="specimen-label" style={{ display: 'block', marginBottom: '6px' }}>
+                    Repository PR / Verification URL
                   </label>
                   <input 
                     type="url"
                     required
                     disabled={!isAcknowledged}
-                    className="terminal-textarea"
-                    style={{ minHeight: '40px', padding: '10px 12px' }}
+                    className="dispatch-textarea"
+                    style={{ height: '44px', padding: '10px 14px' }}
                     value={prUrl}
                     onChange={(e) => setPrUrl(e.target.value)}
                     placeholder="https://github.com/..."
                   />
                 </div>
 
-                <div style={{ marginBottom: '16px' }}>
-                  <label style={{ display: 'block', fontSize: '11px', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)', marginBottom: '6px' }}>
-                    VERIFICATION METRICS & OUTPUT PAYLOAD:
+                <div style={{ marginBottom: '20px' }}>
+                  <label className="specimen-label" style={{ display: 'block', marginBottom: '6px' }}>
+                    Deliverable Summary & Benchmark Metrics
                   </label>
                   <textarea 
                     rows={3}
                     disabled={!isAcknowledged}
-                    className="terminal-textarea"
+                    className="dispatch-textarea"
                     value={payloadNotes}
                     onChange={(e) => setPayloadNotes(e.target.value)}
-                    placeholder="Enter test suite results, API payload response, or benchmarking log..."
+                    placeholder="Summarize code delivery, unit test passes, and performance telemetry..."
                   />
                 </div>
 
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
                   <button 
                     type="submit"
-                    className="btn btn-success"
+                    className="btn btn-primary"
                     disabled={!isAcknowledged || isSubmitting}
                     id="btn-submit-pow"
                   >
                     <Send size={14} />
-                    {isSubmitting ? 'Firing PoW Webhook...' : 'Submit Proof of Work'}
+                    <span>{isSubmitting ? 'Dispatching Webhook...' : 'Submit Proof of Work'}</span>
+                    <span className="arr" aria-hidden="true">
+                      <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 8L8 2M8 2H3.5M8 2V6.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+                    </span>
                   </button>
                 </div>
               </form>
@@ -396,37 +417,46 @@ export function EmployeeWorkspace({ currentUser, lastWsEvent }) {
           </div>
         </>
       ) : (
-        <div className="card" style={{ padding: '36px', textAlign: 'center' }}>
-          <Activity size={32} color="var(--text-dim)" style={{ margin: '0 auto 12px' }} />
-          <h3 className="heading" style={{ fontSize: '16px', color: 'var(--text-muted)' }}>
+        <div className="demo-shell" style={{ textAlign: 'center', padding: '48px 24px' }}>
+          <Activity size={32} style={{ color: 'var(--muted)', margin: '0 auto 12px' }} />
+          <h3 className="serif" style={{ fontSize: '24px', color: 'var(--ink)', marginBottom: '8px' }}>
             No Active Micro-Sprint Assigned
           </h3>
-          <p className="mono" style={{ fontSize: '12px', color: 'var(--text-dim)' }}>
-            Standby node ready. Awaiting autonomous AI dispatch from Founder command.
+          <p style={{ fontSize: '14px', color: 'var(--muted)' }}>
+            This node is currently on standby. Sprints will appear here upon autonomous dispatch.
           </p>
         </div>
       )}
 
-      {/* 4. LOCAL TELEMETRY STATUS BAR (PSYCHOLOGICAL ACCOUNTABILITY) */}
-      <div className="telemetry-footer" style={{ borderRadius: '8px', border: '1px solid var(--border-subtle)', marginTop: '20px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-          <span style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--accent-green)' }}>
+      {/* Local Telemetry Status Bar */}
+      <div style={{
+        marginTop: '24px',
+        padding: '14px 20px',
+        background: 'var(--card)',
+        border: '1px solid var(--line)',
+        borderRadius: 'var(--radius)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        flexWrap: 'wrap',
+        gap: '14px'
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: 'var(--status-green)', fontWeight: '500' }}>
             <ShieldCheck size={14} />
-            [DEVICE VERIFIED: {currentUser.device_mac_address}]
+            Device Verified
           </span>
-          <span style={{ color: 'var(--text-dim)' }}>•</span>
-          <span style={{ color: 'var(--accent-cyan)' }}>
-            [AES-256 TLS 1.3]
+          <span className="mono" style={{ fontSize: '11px', color: 'var(--muted-2)' }}>
+            MAC: {currentUser.device_mac_address}
           </span>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-          <span style={{ color: 'var(--text-muted)' }}>
-            ACTIVE APP: <strong style={{ color: '#ffffff' }}>{activeApp}</strong>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', fontSize: '12px', color: 'var(--muted)' }}>
+          <span>
+            Active Window: <strong style={{ color: 'var(--ink)' }}>{activeApp}</strong>
           </span>
-          <span style={{ color: 'var(--text-dim)' }}>•</span>
-          <span style={{ color: 'var(--accent-green)' }}>
-            VELOCITY: {localKeystrokes} KPS
+          <span className="mono" style={{ color: 'var(--accent-strong)' }}>
+            Velocity: {localKeystrokes} kps
           </span>
         </div>
       </div>

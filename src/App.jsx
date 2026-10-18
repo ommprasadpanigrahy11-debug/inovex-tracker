@@ -107,10 +107,15 @@ export function App() {
 
   if (!currentUser) {
     return (
-      <div style={{ display: 'flex', height: '100vh', alignItems: 'center', justifyContent: 'center', background: '#07090e', color: '#00d2ff', fontFamily: 'monospace' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', fontSize: '13px' }}>
-          <span className="status-dot live"></span>
-          <span>INITIALIZING ANTIGRAVITY RBAC & TELEMETRY ENGINE...</span>
+      <div style={{ display: 'flex', height: '100vh', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)', color: 'var(--ink)', fontFamily: 'var(--font-sans)' }}>
+        <div style={{ textAlign: 'center' }}>
+          <div className="section-kicker" style={{ marginBottom: '12px' }}>System Initializing</div>
+          <h2 className="serif" style={{ fontSize: '28px', color: 'var(--ink)' }}>
+            Lexven Operations <span className="accent">Sentinel</span>
+          </h2>
+          <p style={{ fontSize: '13px', color: 'var(--muted)', marginTop: '6px' }}>
+            Establishing telemetry websocket & node state...
+          </p>
         </div>
       </div>
     );
@@ -119,8 +124,8 @@ export function App() {
   const isFounder = currentUser.role === 'founder';
 
   return (
-    <div className="app-container">
-      {/* HUD Header with Identity, MAC, and RBAC Switcher */}
+    <div>
+      {/* Header with Lexven Brand, Telemetry Status & Role Switcher */}
       <HeaderNav 
         currentUser={currentUser}
         users={users}
@@ -129,29 +134,28 @@ export function App() {
         onSimulateSpoof={handleSimulateSpoof}
       />
 
-      {/* ACTION 2: URGENT HARDWARE SPOOF ALERT TOASTS (Pushed to Founder View) */}
-      <div className="toast-container">
+      {/* ACTION 2: URGENT HARDWARE ANOMALY TOASTS */}
+      <div className="toast-stack">
         {spoofAlerts.map(alert => (
-          <div key={alert.id} className="toast">
-            <ShieldAlert size={26} color="var(--accent-crimson)" style={{ flexShrink: 0 }} />
-            <div style={{ flex: 1 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                <span className="heading" style={{ fontSize: '13px', color: 'var(--accent-crimson)', fontWeight: '700' }}>
-                  {alert.alertTitle || 'ACTION 2: HARDWARE SPOOF ALERT'}
-                </span>
-                <button 
-                  onClick={() => setSpoofAlerts(prev => prev.filter(a => a.id !== alert.id))}
-                  style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
-                >
-                  <X size={14} />
-                </button>
+          <div key={alert.id} className="lexven-toast">
+            <div className="toast-header">
+              <div className="toast-title">
+                <ShieldAlert size={16} />
+                <span>Security Sentinel: Hardware Anomaly Detected</span>
               </div>
-              <p style={{ fontSize: '12px', color: '#fca5a5', lineHeight: '1.4', marginBottom: '6px' }}>
-                {alert.alertMessage}
-              </p>
-              <div className="mono" style={{ fontSize: '10px', color: 'var(--text-dim)' }}>
-                Target: {alert.log?.user_name} ({alert.log?.device_mac_address}) • Window: {alert.log?.active_window}
-              </div>
+              <button 
+                onClick={() => setSpoofAlerts(prev => prev.filter(a => a.id !== alert.id))}
+                style={{ background: 'transparent', border: 'none', color: 'var(--muted-2)', cursor: 'pointer', padding: '2px' }}
+                aria-label="Close notification"
+              >
+                <X size={15} />
+              </button>
+            </div>
+            <p className="toast-body">
+              {alert.alertMessage}
+            </p>
+            <div className="mono" style={{ fontSize: '11px', color: 'var(--muted-2)', marginTop: '8px' }}>
+              Target: {alert.log?.user_name} ({alert.log?.device_mac_address}) • {alert.log?.active_window}
             </div>
           </div>
         ))}
