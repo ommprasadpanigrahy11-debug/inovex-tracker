@@ -108,11 +108,11 @@ db.exec(`
   );
 `);
 
-// Seed Exact 6 Users if empty
+// Optional Demo Seed (Only if explicitly enabled via SEED_DEMO_DATA=true)
 const userCountStmt = db.prepare('SELECT COUNT(*) as count FROM users');
 const { count } = userCountStmt.get();
 
-if (count === 0) {
+if (count === 0 && process.env.SEED_DEMO_DATA === 'true') {
   const insertUser = db.prepare(`
     INSERT INTO users (id, name, role, device_mac_address, is_active)
     VALUES (?, ?, ?, ?, ?)
