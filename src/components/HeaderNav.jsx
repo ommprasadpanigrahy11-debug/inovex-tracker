@@ -1,7 +1,7 @@
 import React from 'react';
-import { Shield, Sparkles, AlertTriangle, ArrowUpRight } from 'lucide-react';
+import { Shield, Sparkles, AlertTriangle, ArrowUpRight, Smartphone, Download } from 'lucide-react';
 
-export function HeaderNav({ currentUser, users, onSwitchUser, wsConnected, onSimulateSpoof }) {
+export function HeaderNav({ currentUser, users, onSwitchUser, wsConnected, onSimulateSpoof, onOpenInstallModal, canInstallPwa }) {
   const isFounder = currentUser?.role === 'founder';
 
   return (
@@ -9,14 +9,28 @@ export function HeaderNav({ currentUser, users, onSwitchUser, wsConnected, onSim
       <div className="wrap lexven-header-inner">
         {/* Brand & Wordmark */}
         <div className="lexven-brand">
-          <div className="lexven-wordmark">
-            Lexven<span className="leaf">.</span>
+          <div className="lexven-wordmark inovex-wordmark">
+            INOVEX<span className="leaf">.</span>
           </div>
-          <span className="lexven-badge-tag">Operations Sentinel</span>
+          <span className="lexven-badge-tag inovex-badge-tag">Operations Sentinel</span>
         </div>
 
         {/* Status, RBAC & Actions */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
+        <div className="header-actions" style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+          {/* Download & Install on Android Button */}
+          <button 
+            className="btn btn-secondary install-app-btn"
+            style={{ padding: '6px 13px', fontSize: '12px', gap: '6px' }}
+            onClick={onOpenInstallModal}
+            title="Download & Install Inovex Tracker on Android phone or Desktop"
+          >
+            <Smartphone size={13} style={{ color: 'var(--accent)' }} />
+            <span>Install on Android</span>
+            {canInstallPwa && (
+              <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--status-green)', display: 'inline-block' }}></span>
+            )}
+          </button>
+
           {/* WebSocket Live Telemetry Status */}
           <div className="live-pill">
             <span className="dot" style={{ background: wsConnected ? 'var(--status-green)' : 'var(--status-red)' }}></span>

@@ -1,0 +1,19 @@
+{
+  "name": "inovex-desktop-agent",
+  "version": "1.0.0",
+  "description": "Inovex Tracker - Standalone Desktop Agent (No Web Browser Required)",
+  "main": "agent.js",
+  "type": "module",
+  "scripts": {
+    "start": "node agent.js",
+    "test-sprint": "set TEST_FAST_SPRINT=1&& node agent.js usr_emp_01"
+  },
+  "keywords": [
+    "inovex",
+    "desktop-agent",
+    "screen-monitoring",
+    "ai-audit"
+  ],
+  "author": "Inovex Systems",
+  "license": "MIT"
+}

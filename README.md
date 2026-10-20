@@ -28,25 +28,73 @@ cd inovex-tracker
 npm install
 ```
 
-### Running Locally
+### Running on Desktop (Any Browser)
 
 ```bash
-# Development mode (with live HMR)
-npm run dev
-
-# Or start the unified full-stack server
+# Build web app and sync to Android
 npm run build
+
+# Start the unified web server
 npm start
 ```
 
-Open your browser at **http://localhost:5000/**.
+1. Open your desktop browser at **http://localhost:5000/** (Works in Chrome, Edge, Safari, Firefox).
+2. The entire platform (Founder Dashboard, Employee Workspace, 90-minute sprints, screen sentinel, and live telemetry) is ready immediately.
+
+---
+
+### Downloading & Installing on Android Sets
+
+You have **two straightforward ways** to install on Android sets:
+
+#### Method 1: Instant PWA Install (Direct from Mobile Browser — No App Store Needed)
+1. Make sure your Android device is on the same Wi-Fi network as the server host.
+2. When the server starts, it prints your local network IP (e.g., `http://192.168.x.x:5000` or `http://10.x.x.x:5000`).
+3. Open **Google Chrome**, **Microsoft Edge**, or **Samsung Internet** on your Android phone and visit that URL.
+4. Tap the **"Install on Android"** button in the header (or tap Chrome's `⋮` menu > **"Install app"** / **"Add to Home screen"**).
+5. The Inovex Tracker will be downloaded and installed into your Android app drawer with a custom home screen icon, splash screen, and full-screen standalone window (no browser address bar).
+
+#### Method 2: Native Android APK (Capacitor)
+If you prefer a standalone `.apk` package:
+```bash
+# 1. Build and copy assets
+npm run build
+
+# 2. Open project in Android Studio
+npx cap open android
+```
+- In Android Studio, click **Build > Build Bundle(s) / APK(s) > Build APK(s)** to generate the `.apk` file for direct installation on any Android set.
+
+## 🌐 Live Vercel Production Deployment
+
+- **Live Production URL**: **[https://dist-omega-rosy-35.vercel.app](https://dist-omega-rosy-35.vercel.app)**
+- **Vercel Project**: `ommprasadpanigrahy11-2245s-projects/dist`
+
+---
+
+## ⚡ Supabase Cloud Backend Setup
+
+To connect your own free Supabase cloud instance:
+
+1. Create a project at [supabase.com](https://supabase.com).
+2. Open the **SQL Editor** in Supabase and run the SQL script in [`supabase/schema.sql`](file:///e:/Inovex%20tracker/supabase/schema.sql). This sets up:
+   - Tables: `users`, `tasks`, `telemetry_logs`, `sprint_audits`
+   - Realtime Publication: broadcasts telemetry and alerts with sub-second latency
+   - Cloud Storage: `sprint-recordings` bucket for full 90-minute employee video audits
+   - RLS Policies and Initial Seed Data (Founders & Engineering Nodes)
+3. Under **Project Settings > API**, copy your **Project URL** and **anon/public key**.
+4. In Vercel Project Settings > **Environment Variables**, add:
+   - `VITE_SUPABASE_URL` = `https://your-project.supabase.co`
+   - `VITE_SUPABASE_ANON_KEY` = `your-anon-key`
+
+---
 
 ## 🛠️ Tech Stack
 
-- **Frontend**: React 18, Vite, Lucide Icons, Vanilla CSS
-- **Backend**: Node.js, Express, WebSocket (`ws`)
-- **Database**: Node.js built-in `DatabaseSync` SQLite
-- **Network**: Unified reverse proxy and single-host static asset delivery
+- **Frontend**: React 18, Vite, Lucide Icons, Vanilla CSS (Instrument Serif + Lexven Linen Theme)
+- **Deployment**: Vercel Edge Network (Auto-SSL, PWA standalone headers)
+- **Cloud Backend**: Supabase (PostgreSQL, Realtime WebSocket Broadcast Channels, Cloud Storage)
+- **Local Fallback**: Node.js Express, Built-in SQLite, Native Desktop Agent
 
 ## 📄 License
 

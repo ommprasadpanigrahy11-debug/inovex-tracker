@@ -1,0 +1,7 @@
+node_modules
+android
+desktop-agent
+server/data
+.git
+.agents
+.gemini

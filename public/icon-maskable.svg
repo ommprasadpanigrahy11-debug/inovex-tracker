@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGradMask" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4E5F3A"/>
+      <stop offset="100%" stop-color="#242721"/>
+    </linearGradient>
+    <linearGradient id="glyphGradMask" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#EDF1E3"/>
+      <stop offset="100%" stop-color="#8FA87B"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Full background for maskable safe zone -->
+  <rect width="512" height="512" fill="url(#bgGradMask)"/>
+  
+  <!-- Outer subtle radar ring -->
+  <circle cx="256" cy="256" r="150" fill="none" stroke="rgba(237, 241, 227, 0.16)" stroke-width="4" stroke-dasharray="8 8"/>
+
+  <!-- Center Hexagon / Shield in safe zone (80% circle) -->
+  <polygon points="256,150 336,198 336,298 256,346 176,298 176,198" fill="rgba(237, 241, 227, 0.1)" stroke="#8FA87B" stroke-width="6"/>
+
+  <!-- High-Tech Lightning Bolt -->
+  <path d="M260 176 L206 270 L252 270 L244 346 L312 244 L266 244 Z" fill="url(#glyphGradMask)"/>
+
+  <!-- Accent Status Dot -->
+  <circle cx="336" cy="198" r="10" fill="#3E8A5E"/>
+</svg>

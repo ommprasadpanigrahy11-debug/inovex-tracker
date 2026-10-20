@@ -62,6 +62,52 @@ db.exec(`
   );
 `);
 
+// Dynamic column migrations for Employee Sprint & AI Agent Tracking
+try { db.exec('ALTER TABLE tasks ADD COLUMN warning_count INTEGER DEFAULT 0;'); } catch (e) {}
+try { db.exec('ALTER TABLE tasks ADD COLUMN session_terminated INTEGER DEFAULT 0;'); } catch (e) {}
+try { db.exec('ALTER TABLE tasks ADD COLUMN screen_tracking_active INTEGER DEFAULT 0;'); } catch (e) {}
+try { db.exec('ALTER TABLE tasks ADD COLUMN termination_reason TEXT;'); } catch (e) {}
+try { db.exec('ALTER TABLE tasks ADD COLUMN proof_url TEXT;'); } catch (e) {}
+try { db.exec('ALTER TABLE tasks ADD COLUMN payload_notes TEXT;'); } catch (e) {}
+
+// Dynamic column migrations for Users Biometric Passkeys
+try { db.exec('ALTER TABLE users ADD COLUMN biometric_passkey_id TEXT;'); } catch (e) {}
+try { db.exec('ALTER TABLE users ADD COLUMN biometric_enrolled INTEGER DEFAULT 1;'); } catch (e) {}
+try { db.exec('ALTER TABLE users ADD COLUMN email TEXT;'); } catch (e) {}
+
+// 4. Sprint Audits Table (Stores 90-Min Recordings & AI Agent Anomaly Audits)
+db.exec(`
+  CREATE TABLE IF NOT EXISTS sprint_audits (
+    id TEXT PRIMARY KEY,
+    task_id TEXT,
+    user_id TEXT NOT NULL,
+    employee_name TEXT,
+    device_type TEXT DEFAULT 'desktop',
+    video_filename TEXT NOT NULL,
+    video_url TEXT NOT NULL,
+    duration_seconds INTEGER DEFAULT 5400,
+    ai_health_score INTEGER DEFAULT 85,
+    anomaly_count INTEGER DEFAULT 0,
+    anomalies_json TEXT,
+    focus_breakdown_json TEXT,
+    ai_summary TEXT,
+    verdict TEXT DEFAULT 'CLEAN',
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+`);
+
+// 5. Cross-Device Biometric Sessions Table (QR Code Mobile <-> Desktop Bridge)
+db.exec(`
+  CREATE TABLE IF NOT EXISTS biometric_sessions (
+    session_id TEXT PRIMARY KEY,
+    confirmed INTEGER DEFAULT 0,
+    payload_json TEXT,
+    created_at INTEGER NOT NULL,
+    confirmed_at INTEGER
+  );
+`);
+
 // Seed Exact 6 Users if empty
 const userCountStmt = db.prepare('SELECT COUNT(*) as count FROM users');
 const { count } = userCountStmt.get();

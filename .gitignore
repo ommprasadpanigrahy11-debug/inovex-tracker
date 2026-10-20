@@ -8,11 +8,13 @@ dist/
 dist-ssr/
 *.local
 
-# SQLite Database files
+# SQLite Database and local recordings
 server/data/*.db
 server/data/*.db-journal
 server/data/*.db-wal
 server/data/*.db-shm
+server/data/recordings/
+desktop-agent/recordings/
 
 # Environment variables
 .env
@@ -33,3 +35,6 @@ pnpm-debug.log*
 Thumbs.db
 .vscode/
 .idea/
+
+.vercel
+.env*

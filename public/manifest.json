@@ -1,0 +1,50 @@
+{
+  "name": "INOVEX Operations Sentinel v2.0",
+  "short_name": "INOVEX",
+  "description": "Zero-latency telemetry-driven operations platform with strict RBAC, 90-minute sprints, and autonomous AI Sentinel",
+  "start_url": "/",
+  "id": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "window-controls-overlay", "minimal-ui"],
+  "orientation": "any",
+  "background_color": "#FAFAF8",
+  "theme_color": "#4E5F3A",
+  "categories": ["business", "productivity", "utilities"],
+  "icons": [
+    {
+      "src": "/icon-192.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-maskable.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Start 90-Min Sprint",
+      "short_name": "Sprint",
+      "description": "Engage 90-minute timer and screen sentinel",
+      "url": "/?action=sprint",
+      "icons": [{ "src": "/icon-192.svg", "sizes": "192x192" }]
+    },
+    {
+      "name": "Founder Dashboard",
+      "short_name": "Dashboard",
+      "description": "View live node telemetry and AI audits",
+      "url": "/?role=founder",
+      "icons": [{ "src": "/icon-192.svg", "sizes": "192x192" }]
+    }
+  ]
+}
