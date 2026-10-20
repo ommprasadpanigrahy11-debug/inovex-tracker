@@ -16,6 +16,7 @@ export function App() {
   const [wsConnected, setWsConnected] = useState(false);
   const [lastWsEvent, setLastWsEvent] = useState(null);
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [inspectedEmployee, setInspectedEmployee] = useState(null);
 
   // PWA & Android Installation State
   const [installModalOpen, setInstallModalOpen] = useState(false);
@@ -216,7 +217,14 @@ export function App() {
 
   // Handle Cross-Device Mobile Biometric Relay Terminal
   const urlParams = new URLSearchParams(window.location.search);
-  if (urlParams.has('bio_session')) {
+  if (
+    urlParams.has('bio_session') || 
+    urlParams.has('verify') || 
+    urlParams.has('session') || 
+    urlParams.has('terminal') || 
+    urlParams.has('pin') ||
+    urlParams.has('pair')
+  ) {
     return <MobileBiometricTerminal />;
   }
 
@@ -254,14 +262,23 @@ export function App() {
       <SidebarNav 
         currentUser={currentUser}
         users={users}
-        onSwitchUser={handleSwitchUser}
+        onSwitchUser={(userId) => {
+          setInspectedEmployee(null);
+          handleSwitchUser(userId);
+        }}
         wsConnected={wsConnected}
         onSimulateSpoof={handleSimulateSpoof}
         onOpenInstallModal={() => setInstallModalOpen(true)}
         canInstallPwa={canInstallPwa}
         activeTab={activeTab}
-        onTabChange={setActiveTab}
-        onLogout={handleLogout}
+        onTabChange={(tab) => {
+          setActiveTab(tab);
+          setInspectedEmployee(null);
+        }}
+        onLogout={() => {
+          setInspectedEmployee(null);
+          handleLogout();
+        }}
       />
 
       {/* Main Content Viewport */}
@@ -303,11 +320,21 @@ export function App() {
 
         {/* Dynamic View Routing Based on Role */}
         {isFounder ? (
-          <AdminDashboard 
-            currentUser={currentUser} 
-            lastWsEvent={lastWsEvent}
-            activeTab={activeTab}
-          />
+          inspectedEmployee ? (
+            <EmployeeWorkspace 
+              currentUser={inspectedEmployee} 
+              lastWsEvent={lastWsEvent}
+              isFounderInspecting={true}
+              onBackToFounder={() => setInspectedEmployee(null)}
+            />
+          ) : (
+            <AdminDashboard 
+              currentUser={currentUser} 
+              lastWsEvent={lastWsEvent}
+              activeTab={activeTab}
+              onInspectEmployee={(emp) => setInspectedEmployee(emp)}
+            />
+          )
         ) : (
           <EmployeeWorkspace 
             currentUser={currentUser} 

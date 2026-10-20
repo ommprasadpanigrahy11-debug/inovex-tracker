@@ -23,7 +23,7 @@ import {
 } from 'lucide-react';
 import { fetchAdminData, dispatchSprintTask } from '../lib/dataService';
 
-export function AdminDashboard({ currentUser, lastWsEvent, activeTab }) {
+export function AdminDashboard({ currentUser, lastWsEvent, activeTab, onInspectEmployee }) {
   const [gridUsers, setGridUsers] = useState([]);
   const [telemetryLogs, setTelemetryLogs] = useState([]);
   const [healthMatrix, setHealthMatrix] = useState([]);
@@ -323,6 +323,16 @@ export function AdminDashboard({ currentUser, lastWsEvent, activeTab }) {
                 <div 
                   key={user.id} 
                   className={`node-card ${isFounder ? 'founder' : ''} ${isSpoofed ? 'anomaly' : ''}`}
+                  onClick={() => {
+                    if (!isFounder && onInspectEmployee) {
+                      onInspectEmployee(user);
+                    }
+                  }}
+                  style={{
+                    cursor: !isFounder ? 'pointer' : 'default',
+                    transition: 'all 0.2s ease'
+                  }}
+                  title={!isFounder ? `Click to inspect ${user.name}'s workspace & assigned tasks` : undefined}
                 >
                 <div className="node-card-header">
                   <div className="node-title-group">
@@ -398,6 +408,23 @@ export function AdminDashboard({ currentUser, lastWsEvent, activeTab }) {
                       <div className="meter-track">
                         <div className={`meter-fill ${healthClass}`} style={{ width: `${healthScore}%` }}></div>
                       </div>
+                    </div>
+
+                    {/* Open Employee Workspace Redirect Action */}
+                    <div style={{ marginTop: '12px', paddingTop: '10px', borderTop: '1px solid var(--line)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <span className="specimen-label" style={{ fontSize: '10px', margin: 0 }}>Employee Workspace</span>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        style={{ fontSize: '11px', padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (onInspectEmployee) onInspectEmployee(user);
+                        }}
+                      >
+                        <span>Open Dashboard</span>
+                        <span className="arr" aria-hidden="true">→</span>
+                      </button>
                     </div>
                   </div>
                 )}

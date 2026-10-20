@@ -142,6 +142,7 @@ export async function fetchUsers() {
 export async function fetchWorkspaceData(userId) {
   let user = null;
   let task = null;
+  let tasks = [];
   let telemetry = null;
 
   // 1. Fetch from Server
@@ -152,6 +153,9 @@ export async function fetchWorkspaceData(userId) {
       if (sData) {
         user = sData.user;
         task = sData.task;
+        if (Array.isArray(sData.tasks)) {
+          tasks = sData.tasks;
+        }
         telemetry = sData.telemetry;
       }
     }
@@ -169,14 +173,17 @@ export async function fetchWorkspaceData(userId) {
         if (userData) user = userData;
       }
 
-      if (!task) {
-        const { data: tasks } = await supabase
-          .from('tasks')
-          .select('*')
-          .eq('assigned_to', userId)
-          .order('created_at', { ascending: false })
-          .limit(1);
-        if (tasks && tasks.length > 0) task = tasks[0];
+      const { data: cloudTasks } = await supabase
+        .from('tasks')
+        .select('*')
+        .eq('assigned_to', userId)
+        .order('created_at', { ascending: false });
+
+      if (cloudTasks && cloudTasks.length > 0) {
+        tasks = cloudTasks;
+        if (!task) {
+          task = cloudTasks.find(t => t.status === 'active') || cloudTasks[0];
+        }
       }
     } catch (e) {
       console.warn('Supabase fetchWorkspaceData fallback:', e);
@@ -189,14 +196,19 @@ export async function fetchWorkspaceData(userId) {
     user = localUsers.find(u => u.id === userId) || null;
   }
 
+  const localTasks = getLocalStore(STORAGE_KEYS.TASKS, []);
+  const userLocalTasks = localTasks.filter(t => t.assigned_to === userId);
+  if (userLocalTasks.length > 0 && tasks.length === 0) {
+    tasks = userLocalTasks;
+  }
   if (!task) {
-    const localTasks = getLocalStore(STORAGE_KEYS.TASKS, []);
-    task = localTasks.find(t => t.assigned_to === userId && t.status !== 'verified') || null;
+    task = tasks.find(t => t.status === 'active') || tasks[0] || null;
   }
 
   return {
     user,
     task,
+    tasks: tasks || [],
     telemetry: telemetry || {
       active_window: 'VS Code — workspace.ts',
       keystroke_rate: 42,

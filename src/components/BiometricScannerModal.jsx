@@ -13,7 +13,9 @@ import {
   ExternalLink,
   ArrowRight,
   RefreshCw,
-  Sparkles
+  Sparkles,
+  Copy,
+  Check
 } from 'lucide-react';
 import { subscribeToBiometricSession } from '../lib/supabase';
 
@@ -38,6 +40,8 @@ export function BiometricScannerModal({
   const [qrDataUrl, setQrDataUrl] = useState('');
   const [mobileAuthUrl, setMobileAuthUrl] = useState('');
   const [sessionId, setSessionId] = useState('');
+  const [pinCode, setPinCode] = useState('');
+  const [copiedLink, setCopiedLink] = useState(false);
   const [statusMessage, setStatusMessage] = useState('Waiting for phone scan...');
   const [timeRemaining, setTimeRemaining] = useState(300); // 5 min countdown for QR pairing
 
@@ -53,22 +57,32 @@ export function BiometricScannerModal({
   useEffect(() => {
     if (isOpen) {
       const newSessionId = 'BIO_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7).toUpperCase();
+      // Deterministic 6-digit numeric pairing PIN
+      const generatedPin = Math.abs(newSessionId.split('').reduce((acc, c) => (acc * 31 + c.charCodeAt(0)) | 0, 0) % 900000 + 100000).toString();
+
       setSessionId(newSessionId);
+      setPinCode(generatedPin);
       setScanState('idle');
       setEntropyProgress(0);
       setTimeRemaining(300);
+      setCopiedLink(false);
+
+      // Store PIN to Session ID map locally
+      try {
+        localStorage.setItem(`inovex_pin_${generatedPin}`, newSessionId);
+      } catch (e) {}
 
       const targetMethod = isMobileDevice ? 'mobile_direct' : 'desktop_qr';
       setAuthMethod(targetMethod);
 
-      // Generate Cross-Device Pairing URL
+      // Generate Cross-Device Pairing URL (Clean standard URL to prevent camera passkey errors)
       const origin = window.location.origin;
       const nodeName = nodeIdentity?.name || 'Authorized Operator';
       const nodeRole = nodeIdentity?.role || 'employee';
       const nodeMac = nodeIdentity?.device_mac_address || 'Desktop Workstation';
 
       const generatePairingQr = (targetOrigin) => {
-        const pairUrl = `${targetOrigin}/?bio_session=${newSessionId}&action=${actionType}&node=${encodeURIComponent(nodeName)}&role=${nodeRole}&mac=${encodeURIComponent(nodeMac)}`;
+        const pairUrl = `${targetOrigin}/?terminal=1&session=${newSessionId}&verify=${newSessionId}&pin=${generatedPin}&n=${encodeURIComponent(nodeName)}&r=${nodeRole}&m=${encodeURIComponent(nodeMac)}`;
         setMobileAuthUrl(pairUrl);
 
         QRCode.toDataURL(pairUrl, {
@@ -99,7 +113,7 @@ export function BiometricScannerModal({
 
       setStatusMessage(
         targetMethod === 'desktop_qr' 
-          ? 'Scan this QR code from your mobile phone camera to verify your fingerprint.' 
+          ? 'Open phone camera to scan, or enter the 6-digit PIN below.' 
           : 'Touch your device fingerprint sensor to authenticate.'
       );
 
@@ -108,9 +122,17 @@ export function BiometricScannerModal({
         sessionUnsubRef.current();
       }
 
-      sessionUnsubRef.current = subscribeToBiometricSession(newSessionId, (payload) => {
+      const unsubSession = subscribeToBiometricSession(newSessionId, (payload) => {
         handleRemoteMobileConfirmation(payload);
       });
+      const unsubPin = subscribeToBiometricSession(`BIO_PIN_${generatedPin}`, (payload) => {
+        handleRemoteMobileConfirmation(payload);
+      });
+
+      sessionUnsubRef.current = () => {
+        if (unsubSession) unsubSession();
+        if (unsubPin) unsubPin();
+      };
     }
 
     return () => {
@@ -307,6 +329,25 @@ export function BiometricScannerModal({
         {authMethod === 'desktop_qr' && (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
             
+            {/* Phone Camera Notice Banner */}
+            <div style={{ 
+              background: 'var(--accent-tint-2)', 
+              border: '1px solid rgba(95, 115, 72, 0.25)', 
+              borderRadius: '8px', 
+              padding: '8px 12px', 
+              marginBottom: '12px', 
+              width: '100%',
+              display: 'flex', 
+              alignItems: 'center', 
+              gap: '8px'
+            }}>
+              <Smartphone size={16} style={{ color: 'var(--accent-strong)', flexShrink: 0 }} />
+              <div style={{ fontSize: '11px', color: 'var(--ink)', lineHeight: '1.4' }}>
+                <strong>Use standard Phone Camera</strong> or Chrome/Safari. 
+                <span style={{ color: 'var(--muted)', display: 'block' }}>Do not use system passkey settings — standard camera opens the terminal directly.</span>
+              </div>
+            </div>
+
             <div className="bio-qr-container" style={{ position: 'relative', background: '#FFFFFF', padding: '14px', borderRadius: '14px', border: '2px solid var(--line)', boxShadow: '0 12px 32px rgba(11, 11, 12, 0.12)', textAlign: 'center' }}>
               {qrDataUrl ? (
                 <img 
@@ -334,19 +375,52 @@ export function BiometricScannerModal({
               )}
             </div>
 
-            {/* Instruction banner under QR */}
-            <div style={{ textAlign: 'center', marginTop: '14px' }}>
-              <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: '600', color: 'var(--ink)' }}>
-                <Smartphone size={14} style={{ color: 'var(--accent-strong)' }} />
-                <span>Scan with your mobile camera to scan your finger</span>
+            {/* 6-Digit Direct Sync PIN Fallback */}
+            {pinCode && (
+              <div style={{ 
+                background: 'var(--bg)', 
+                border: '1px solid var(--line)', 
+                borderRadius: '8px', 
+                padding: '10px 14px', 
+                width: '100%', 
+                marginTop: '12px', 
+                textAlign: 'center' 
+              }}>
+                <div style={{ fontSize: '11px', color: 'var(--muted)', marginBottom: '2px' }}>
+                  Or enter 6-digit PIN on mobile phone:
+                </div>
+                <div className="mono" style={{ fontSize: '20px', fontWeight: '700', color: 'var(--ink)', letterSpacing: '4px' }}>
+                  {pinCode.slice(0, 3)} {pinCode.slice(3)}
+                </div>
               </div>
-              <p className="mono" style={{ fontSize: '11px', color: scanState === 'success' ? 'var(--status-green)' : 'var(--muted)', marginTop: '4px' }}>
+            )}
+
+            {/* Instruction banner under QR */}
+            <div style={{ textAlign: 'center', marginTop: '10px' }}>
+              <p className="mono" style={{ fontSize: '11px', color: scanState === 'success' ? 'var(--status-green)' : 'var(--muted)', margin: 0 }}>
                 {statusMessage}
               </p>
             </div>
 
             {/* Quick Testing / Desktop Helper Actions */}
-            <div style={{ width: '100%', marginTop: '14px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <div style={{ width: '100%', marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {/* Copy Mobile Terminal Link Button */}
+              <button
+                type="button"
+                className="btn btn-secondary"
+                style={{ width: '100%', fontSize: '12px', padding: '8px 12px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+                onClick={() => {
+                  if (mobileAuthUrl && navigator.clipboard) {
+                    navigator.clipboard.writeText(mobileAuthUrl);
+                    setCopiedLink(true);
+                    setTimeout(() => setCopiedLink(false), 2500);
+                  }
+                }}
+              >
+                {copiedLink ? <Check size={13} style={{ color: 'var(--status-green)' }} /> : <Copy size={13} />}
+                <span>{copiedLink ? 'Copied Pairing Link to Clipboard!' : 'Copy Mobile Terminal Link'}</span>
+              </button>
+
               {/* Instant Verification Button */}
               <button
                 type="button"

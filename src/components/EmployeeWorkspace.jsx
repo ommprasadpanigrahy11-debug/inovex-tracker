@@ -8,6 +8,8 @@ import {
   GitPullRequest, 
   Send, 
   ShieldCheck, 
+  ShieldAlert, 
+  Shield,
   AlertTriangle, 
   AlertOctagon,
   ArrowUpRight,
@@ -15,7 +17,6 @@ import {
   Activity,
   Monitor,
   Eye,
-  ShieldAlert,
   Play,
   Square,
   Zap,
@@ -26,8 +27,14 @@ import { fetchWorkspaceData, startSprintSession, submitProofOfWork, triggerAiAct
 import { uploadRecordingToSupabase } from '../lib/supabase';
 import { BiometricScannerModal } from './BiometricScannerModal';
 
-export function EmployeeWorkspace({ currentUser, lastWsEvent }) {
+export function EmployeeWorkspace({ 
+  currentUser, 
+  lastWsEvent,
+  isFounderInspecting = false,
+  onBackToFounder = null 
+}) {
   const [workspaceData, setWorkspaceData] = useState(null);
+  const [selectedTaskId, setSelectedTaskId] = useState(null);
   const [loading, setLoading] = useState(true);
 
   // Fixed 90-min Timer State (5400 seconds fixed)
@@ -571,12 +578,59 @@ export function EmployeeWorkspace({ currentUser, lastWsEvent }) {
     return `${m}:${s}`;
   };
 
-  const currentTask = workspaceData?.task;
+  const allTasks = (workspaceData?.tasks && workspaceData.tasks.length > 0)
+    ? workspaceData.tasks 
+    : (workspaceData?.task ? [workspaceData.task] : []);
+
+  const currentTask = (selectedTaskId ? allTasks.find(t => t.id === selectedTaskId) : null)
+    || workspaceData?.task 
+    || allTasks[0] 
+    || null;
+
   const isAcknowledged = currentTask?.is_acknowledged === 1;
   const isCompletedOrReview = currentTask?.status === 'review' || currentTask?.status === 'verified';
 
   return (
     <div className="wrap" style={{ paddingBottom: '40px' }}>
+      {/* FOUNDER INSPECTION OVERSEER BANNER */}
+      {isFounderInspecting && (
+        <div style={{
+          background: 'var(--accent-tint-2)',
+          border: '1px solid rgba(95, 115, 72, 0.3)',
+          borderLeft: '5px solid var(--accent-strong)',
+          borderRadius: 'var(--radius)',
+          padding: '14px 20px',
+          marginBottom: '20px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          gap: '14px'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <Shield size={22} style={{ color: 'var(--accent-strong)', flexShrink: 0 }} />
+            <div>
+              <div style={{ fontSize: '14px', fontWeight: '600', color: 'var(--ink)' }}>
+                Founder Telemetry Overseer • Inspecting Employee: <span style={{ color: 'var(--accent-strong)' }}>{currentUser.name}</span>
+              </div>
+              <div className="mono" style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '2px' }}>
+                Device MAC: {currentUser.device_mac_address} • {currentUser.email} • Direct Employee Mirror Mode
+              </div>
+            </div>
+          </div>
+          {onBackToFounder && (
+            <button 
+              type="button"
+              className="btn btn-primary"
+              style={{ fontSize: '12px', padding: '8px 16px', display: 'flex', alignItems: 'center', gap: '6px' }}
+              onClick={onBackToFounder}
+            >
+              <span>← Back to Founder Orchestration Grid</span>
+            </button>
+          )}
+        </div>
+      )}
+
       {/* AI AGENT TERMINATION MODAL */}
       {isTerminated && (
         <div style={{
@@ -691,6 +745,88 @@ export function EmployeeWorkspace({ currentUser, lastWsEvent }) {
           <span className="mono" style={{ fontSize: '11px', color: 'var(--muted-2)' }}>
             Physical Sensor Bound: <strong>{currentUser.device_mac_address}</strong>
           </span>
+        </div>
+      </div>
+
+      {/* ASSIGNED TASKS TABLE */}
+      <div className="demo-shell" style={{ padding: '20px 22px', marginBottom: '20px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px', flexWrap: 'wrap', gap: '8px' }}>
+          <div>
+            <div className="section-kicker" style={{ marginBottom: '4px' }}>Workstream Directives</div>
+            <h3 className="serif" style={{ fontSize: '22px', color: 'var(--ink)', margin: 0 }}>
+              Assigned Tasks
+            </h3>
+          </div>
+          <span className="mono" style={{ fontSize: '11px', color: 'var(--muted)' }}>
+            {allTasks.length} task{allTasks.length === 1 ? '' : 's'} assigned to node
+          </span>
+        </div>
+
+        <div className="table-wrap">
+          <table style={{ width: '100%' }}>
+            <thead>
+              <tr>
+                <th style={{ width: '70px' }}>Sl. No</th>
+                <th>Task</th>
+                <th style={{ width: '140px' }}>Time Limit</th>
+                <th style={{ width: '130px' }}>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {allTasks.length === 0 ? (
+                <tr>
+                  <td colSpan={4} style={{ textAlign: 'center', padding: '26px 16px', color: 'var(--muted)' }}>
+                    No tasks assigned to this employee workspace yet. Directives dispatched by the Founder will appear here in real-time.
+                  </td>
+                </tr>
+              ) : (
+                allTasks.map((t, idx) => {
+                  const isSelected = currentTask?.id === t.id;
+                  const isVerified = t.status === 'verified';
+                  const isReview = t.status === 'review';
+                  const isActive = t.status === 'active';
+
+                  return (
+                    <tr 
+                      key={t.id || idx}
+                      onClick={() => setSelectedTaskId(t.id)}
+                      style={{ 
+                        cursor: 'pointer',
+                        background: isSelected ? 'var(--accent-tint-2)' : undefined
+                      }}
+                      title="Select task to view sprint objective and submit deliverables"
+                    >
+                      <td className="mono" style={{ fontWeight: '600', color: isSelected ? 'var(--accent-strong)' : 'var(--muted)' }}>
+                        {String(idx + 1).padStart(2, '0')}
+                      </td>
+                      <td>
+                        <div style={{ fontWeight: '600', color: 'var(--ink)', fontSize: '13px' }}>
+                          {t.title}
+                        </div>
+                        {t.brief_content && (
+                          <div style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '440px' }}>
+                            {t.brief_content}
+                          </div>
+                        )}
+                      </td>
+                      <td className="mono" style={{ fontSize: '12px', color: 'var(--ink)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                          <Clock size={12} style={{ color: 'var(--accent-strong)' }} />
+                          <span>90 Mins Fixed</span>
+                        </div>
+                      </td>
+                      <td>
+                        <span className={`badge ${isActive ? 'active' : isReview ? 'founder' : isVerified ? 'active' : 'waiting'}`} style={{ fontSize: '10px', padding: '2px 8px' }}>
+                          <span className="badge-dot"></span>
+                          {t.status ? (t.status === 'review' ? 'Under Review' : t.status.charAt(0).toUpperCase() + t.status.slice(1)) : 'Pending'}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
 

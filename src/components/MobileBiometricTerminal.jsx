@@ -19,20 +19,51 @@ export function MobileBiometricTerminal() {
   const [entropyProgress, setEntropyProgress] = useState(0);
   const [statusText, setStatusText] = useState('Touch capacitive sensor to scan fingerprint');
   const [isRelayed, setIsRelayed] = useState(false);
+  const [manualPin, setManualPin] = useState('');
+  const [pinError, setPinError] = useState('');
 
   useEffect(() => {
     // Parse query params from desktop QR code
     const params = new URLSearchParams(window.location.search);
-    const sessionId = params.get('bio_session');
+    const sessionId = params.get('session') || params.get('verify') || params.get('bio_session') || params.get('pair');
+    const pin = params.get('pin');
     const action = params.get('action') || 'authenticate';
-    const node = params.get('node') || 'Authorized Operator';
-    const role = params.get('role') || 'employee';
-    const mac = params.get('mac') || 'Desktop Workstation';
+    const node = params.get('node') || params.get('n') || 'Authorized Operator';
+    const role = params.get('role') || params.get('r') || 'employee';
+    const mac = params.get('mac') || params.get('m') || 'Desktop Workstation';
 
     if (sessionId) {
-      setSessionParams({ sessionId, action, node, role, mac });
+      setSessionParams({ sessionId, pin, action, node, role, mac });
+    } else if (pin) {
+      // Look up session from local storage or cloud
+      const foundSession = localStorage.getItem(`inovex_pin_${pin}`);
+      if (foundSession) {
+        setSessionParams({ sessionId: foundSession, pin, action, node, role, mac });
+      }
     }
   }, []);
+
+  const handlePinSubmit = (e) => {
+    e.preventDefault();
+    const cleanPin = manualPin.replace(/\s+/g, '').trim();
+    if (cleanPin.length !== 6) {
+      setPinError('Please enter a valid 6-digit numeric PIN.');
+      return;
+    }
+
+    const foundSession = localStorage.getItem(`inovex_pin_${cleanPin}`);
+    const resolvedSessionId = foundSession || `BIO_PIN_${cleanPin}`;
+
+    setSessionParams({
+      sessionId: resolvedSessionId,
+      pin: cleanPin,
+      action: 'authenticate',
+      node: 'Operator Node',
+      role: 'employee',
+      mac: 'Mobile Paired Device'
+    });
+    setPinError('');
+  };
 
   const generateRandomHex = () => {
     return '0x' + Array.from({ length: 16 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
@@ -48,60 +79,6 @@ export function MobileBiometricTerminal() {
     // Provide haptic feedback on mobile touchscreens
     if (typeof navigator !== 'undefined' && navigator.vibrate) {
       try { navigator.vibrate([40, 50]); } catch (e) {}
-    }
-
-    let realPasskeyId = null;
-
-    // Trigger Real Native WebAuthn Biometric Prompt (if HTTPS/localhost supported)
-    if (typeof window !== 'undefined' && window.PublicKeyCredential && navigator.credentials) {
-      try {
-        const isIp = /^\d+\.\d+\.\d+\.\d+$/.test(window.location.hostname);
-        const isSecure = window.location.protocol === 'https:' || window.location.hostname === 'localhost';
-
-        if (isSecure && !isIp) {
-          const challenge = new Uint8Array(32);
-          window.crypto?.getRandomValues?.(challenge);
-
-          if (sessionParams?.action === 'enroll') {
-            // Passkey Enrollment
-            const cred = await navigator.credentials.create({
-              publicKey: {
-                challenge,
-                rp: { name: 'INOVEX Sentinel Enclave', id: window.location.hostname },
-                user: {
-                  id: new Uint8Array(16),
-                  name: (sessionParams?.node || 'node').toLowerCase().replace(/\s+/g, '.'),
-                  displayName: sessionParams?.node || 'INOVEX Operator'
-                },
-                pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
-                authenticatorSelection: {
-                  authenticatorAttachment: 'platform',
-                  userVerification: 'preferred'
-                },
-                timeout: 20000
-              }
-            });
-            if (cred && cred.id) {
-              realPasskeyId = 'FIDO2-PASSKEY-' + cred.id.slice(0, 16);
-            }
-          } else {
-            // Passkey Authentication
-            const assertion = await navigator.credentials.get({
-              publicKey: {
-                challenge,
-                rpId: window.location.hostname,
-                userVerification: 'preferred',
-                timeout: 20000
-              }
-            });
-            if (assertion && assertion.id) {
-              realPasskeyId = 'FIDO2-PASSKEY-' + assertion.id.slice(0, 16);
-            }
-          }
-        }
-      } catch (nativeErr) {
-        console.log('[Mobile WebAuthn] Native biometric info:', nativeErr?.message || nativeErr);
-      }
     }
 
     // High-resolution dermal scan animation progression
@@ -122,7 +99,7 @@ export function MobileBiometricTerminal() {
             try { navigator.vibrate([50, 70, 50]); } catch (e) {}
           }
 
-          const passkeyId = realPasskeyId || ('FIDO2-MOBILE-' + Math.random().toString(36).substring(2, 9).toUpperCase());
+          const passkeyId = 'FIDO2-TOUCH-' + Math.random().toString(36).substring(2, 10).toUpperCase();
           const bioPayload = {
             biometric_verified: true,
             biometric_passkey_id: passkeyId,
@@ -130,7 +107,7 @@ export function MobileBiometricTerminal() {
             operator: sessionParams?.node || 'Authorized Operator',
             role: sessionParams?.role || 'employee',
             device_mac_address: sessionParams?.mac || 'Mobile Bridge',
-            verified_via: 'mobile_hardware_fingerprint',
+            verified_via: 'mobile_capacitive_fingerprint',
             mobile_user_agent: navigator.userAgent
           };
 
@@ -149,12 +126,49 @@ export function MobileBiometricTerminal() {
 
   if (!sessionParams) {
     return (
-      <div className="mobile-bio-container" style={{ padding: '30px 20px', textAlign: 'center', minHeight: '100vh', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', background: '#0B0B0C', color: '#EDF1E3' }}>
+      <div className="mobile-bio-container" style={{ padding: '30px 20px', minHeight: '100vh', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', background: '#0B0B0C', color: '#EDF1E3' }}>
         <Fingerprint size={48} style={{ color: 'var(--accent)', marginBottom: '16px' }} />
-        <h2 className="serif" style={{ fontSize: '24px', marginBottom: '8px' }}>INOVEX Mobile Biometric Bridge</h2>
-        <p style={{ fontSize: '13px', color: '#888', maxWidth: '320px' }}>
-          No active desktop pairing session found. Please scan the QR code from your desktop workstation.
+        <h2 className="serif" style={{ fontSize: '24px', marginBottom: '8px', textAlign: 'center' }}>INOVEX Mobile Biometric Terminal</h2>
+        <p style={{ fontSize: '13px', color: '#888', maxWidth: '340px', textAlign: 'center', marginBottom: '24px', lineHeight: '1.5' }}>
+          Pair your phone with your desktop workstation to verify fingerprint authentication.
         </p>
+
+        {/* 6-Digit PIN Manual Entry Form */}
+        <form onSubmit={handlePinSubmit} style={{ width: '100%', maxWidth: '300px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          <label className="mono" style={{ fontSize: '11px', color: '#aaa', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            Enter Desktop 6-Digit PIN:
+          </label>
+          <input
+            type="text"
+            inputMode="numeric"
+            maxLength={6}
+            value={manualPin}
+            onChange={(e) => setManualPin(e.target.value.replace(/\D/g, ''))}
+            placeholder="123456"
+            className="mono"
+            style={{
+              padding: '12px 16px',
+              fontSize: '22px',
+              fontWeight: '700',
+              textAlign: 'center',
+              letterSpacing: '6px',
+              background: '#141416',
+              border: '1px solid rgba(255, 255, 255, 0.15)',
+              borderRadius: '8px',
+              color: '#EDF1E3'
+            }}
+          />
+          {pinError && (
+            <div style={{ color: 'var(--status-red)', fontSize: '11px', textAlign: 'center' }}>{pinError}</div>
+          )}
+          <button
+            type="submit"
+            className="btn btn-primary"
+            style={{ width: '100%', padding: '12px', fontSize: '14px', background: 'var(--accent-strong)', color: '#fff', borderRadius: '8px' }}
+          >
+            Connect to Desktop Enclave
+          </button>
+        </form>
       </div>
     );
   }
