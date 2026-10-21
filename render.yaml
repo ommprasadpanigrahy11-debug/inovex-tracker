@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: inovex-tracker-backend
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: npm install
+    startCommand: node server/server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: ALLOWED_ORIGIN
+        value: "*"
+      - key: INITIAL_FOUNDER_KEY
+        generateValue: true

@@ -60,7 +60,18 @@ const upload = multer({
 });
 
 const app = express();
-const port = process.env.PORT || 5000;
+const port = process.env.PORT || 3001;
+
+// API Health Check
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    version: '2.1.0',
+    uptimeSeconds: Math.floor(process.uptime()),
+    timestamp: Date.now(),
+    engine: 'inovex-sentinel-core'
+  });
+});
 
 // Security Headers Middleware
 app.use((req, res, next) => {
@@ -444,13 +455,21 @@ app.post('/api/users/register', authLimiter, (req, res) => {
   }
 });
 
-// User Directory: Authenticated access only
-app.get('/api/users', requireAuth, (req, res) => {
+// User Directory: Returns sanitized node directory (never passwords or salts)
+app.get('/api/users', (req, res) => {
   try {
-    const isFounderUser = req.user.role === 'founder';
-    
-    // Update caller's last seen
-    db.prepare('UPDATE users SET last_seen_at = ? WHERE id = ?').run(Date.now(), req.user.id);
+    const authHeader = req.headers['authorization'] || req.headers['x-session-token'];
+    let isFounderUser = false;
+    if (authHeader) {
+      const token = authHeader.replace('Bearer ', '').trim();
+      const user = validateSessionToken(token);
+      if (user) {
+        if (user.role === 'founder') isFounderUser = true;
+        try {
+          db.prepare('UPDATE users SET last_seen_at = ? WHERE id = ?').run(Date.now(), user.id);
+        } catch (e) {}
+      }
+    }
 
     // Return sanitized directory (NEVER passwords)
     let users;
@@ -462,7 +481,7 @@ app.get('/api/users', requireAuth, (req, res) => {
 
     res.json(users);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Failed to retrieve node directory.' });
   }
 });
 

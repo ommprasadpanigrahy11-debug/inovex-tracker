@@ -101,6 +101,14 @@ export function App() {
   const handleLogout = async () => {
     await logoutUser();
     setCurrentUser(null);
+    try {
+      const refreshed = await fetchUsers();
+      if (refreshed && refreshed.length > 0) {
+        setUsers(refreshed);
+      }
+    } catch (e) {
+      console.warn('Failed to refresh users on logout', e);
+    }
   };
 
   // Sync activeTab when user switches
@@ -139,34 +147,40 @@ export function App() {
     };
     window.addEventListener('inovex_telemetry_event', customEventHandler);
 
-    // 2. Connect to Local WebSocket Engine with authentication token
+    // 2. Connect to WebSocket Engine (if configured via VITE_WS_URL or running locally)
     let socket = null;
-    try {
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const token = getAuthToken();
-      const wsUrl = `${protocol}//${window.location.host}/ws${token ? `?token=${encodeURIComponent(token)}` : ''}`;
-      socket = new WebSocket(wsUrl);
+    const configuredWs = import.meta.env.VITE_WS_URL;
+    const isVercelHost = typeof window !== 'undefined' && window.location.hostname.endsWith('vercel.app');
 
-      socket.onopen = () => {
-        setWsConnected(true);
-      };
+    if (configuredWs || !isVercelHost) {
+      try {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const token = getAuthToken();
+        const baseWs = configuredWs ? configuredWs.replace(/\/$/, '') : `${protocol}//${window.location.host}`;
+        const wsUrl = `${baseWs}/ws${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+        socket = new WebSocket(wsUrl);
 
-      socket.onclose = () => {
-        if (!isSupabaseConfigured) {
-          setWsConnected(false);
-        }
-      };
+        socket.onopen = () => {
+          setWsConnected(true);
+        };
 
-      socket.onmessage = (event) => {
-        try {
-          const parsed = JSON.parse(event.data);
-          handleEvent(parsed);
-        } catch (e) {
-          console.error('Error parsing WS message', e);
-        }
-      };
-    } catch (err) {
-      console.warn('Local WS error, running in cloud-resilient mode', err);
+        socket.onclose = () => {
+          if (!isSupabaseConfigured) {
+            setWsConnected(false);
+          }
+        };
+
+        socket.onmessage = (event) => {
+          try {
+            const parsed = JSON.parse(event.data);
+            handleEvent(parsed);
+          } catch (e) {
+            console.error('Error parsing WS message', e);
+          }
+        };
+      } catch (err) {
+        console.warn('Backend WS error, running in cloud-resilient mode', err);
+      }
     }
 
     // 3. Connect to Supabase Cloud Realtime Channel (if configured)

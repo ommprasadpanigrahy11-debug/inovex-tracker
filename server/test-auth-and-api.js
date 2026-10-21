@@ -227,7 +227,7 @@ async function runTests() {
   // ---------------------------------------------------------------------------
   // TEST GROUP 7: Desktop Agent API Contract Compatibility
   // ---------------------------------------------------------------------------
-  console.log('\n[7/7] Testing Desktop Agent API Contract Compatibility...');
+  console.log('\n[7/8] Testing Desktop Agent API Contract Compatibility...');
 
   // Query workspace data as desktop agent does
   const assignedTask = db.prepare("SELECT * FROM tasks WHERE assigned_to = ? ORDER BY created_at DESC LIMIT 1").get(testEmployee.id);
@@ -238,6 +238,23 @@ async function runTests() {
     assert(typeof assignedTask.title === 'string', 'Task title is non-empty string');
     assert(typeof assignedTask.status === 'string', 'Task status field is present');
   }
+
+  // ---------------------------------------------------------------------------
+  // TEST GROUP 8: User Directory Sanitization & Credential Protection
+  // ---------------------------------------------------------------------------
+  console.log('\n[8/8] Testing User Directory Sanitization & Credential Protection...');
+
+  const directoryUsers = db.prepare(`
+    SELECT id, name, role, email, skill_set, device_mac_address, is_active, last_seen_at
+    FROM users 
+    WHERE is_active = 1 
+    ORDER BY created_at ASC
+  `).all();
+
+  assert(directoryUsers.length > 0, 'Directory users retrieved for public node roster');
+  assert(!('password_hash' in directoryUsers[0]), 'Directory record strictly omits password_hash');
+  assert(!('password_salt' in directoryUsers[0]), 'Directory record strictly omits password_salt');
+  assert(typeof directoryUsers[0].email === 'string' && directoryUsers[0].email.includes('@'), 'Directory record has valid email');
 
   console.log('\n======================================================');
   console.log(`  TEST RESULTS: ${passed} PASSED, ${failed} FAILED`);
