@@ -281,10 +281,12 @@ export async function registerUser({ name, email, password, role = 'employee', s
       throw new Error('An authorized node with this email address already exists. Please sign in instead.');
     }
 
-    // Protect founder registration
+    // Protect founder registration (permitted if 0 users exist as initial setup)
     if (role === 'founder') {
+      const { data: allUsers } = await supabase.from('users').select('id').limit(1);
+      const isZeroUsers = !allUsers || allUsers.length === 0;
       const validKey = import.meta.env.VITE_FOUNDER_BOOTSTRAP_KEY || 'INOVEX-FOUNDER-BOOTSTRAP-2026';
-      if (!bootstrapKey || bootstrapKey.trim() !== validKey) {
+      if (!isZeroUsers && (!bootstrapKey || bootstrapKey.trim() !== validKey)) {
         throw new Error('Founder registration requires valid system bootstrap authorization key.');
       }
     }

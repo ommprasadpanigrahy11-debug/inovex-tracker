@@ -222,11 +222,11 @@ db.exec(`
   );
 `);
 
-// Automatic Demo Seed for local deployment
+// Automatic Demo Seed (opt-in only via SEED_DEMO_DATA=true to keep production clean)
 const userCountStmt = db.prepare('SELECT COUNT(*) as count FROM users');
 const { count } = userCountStmt.get();
 
-if (count === 0) {
+if (count === 0 && process.env.SEED_DEMO_DATA === 'true') {
   const insertUser = db.prepare(`
     INSERT INTO users (id, name, role, device_mac_address, is_active, biometric_passkey_id, biometric_enrolled)
     VALUES (?, ?, ?, ?, ?, ?, 1)
