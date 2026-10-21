@@ -60,6 +60,7 @@ export function EmployeeWorkspace({
   const [secondsRemaining, setSecondsRemaining] = useState(5400);
   const [isTimerRunning, setIsTimerRunning] = useState(false);
   const [isTimerExpired, setIsTimerExpired] = useState(false);
+  const targetEndTimeRef = useRef(null);
 
   // AI Agent Warning & Termination State
   const [warningCount, setWarningCount] = useState(0);
@@ -67,28 +68,55 @@ export function EmployeeWorkspace({
   const [isTerminated, setIsTerminated] = useState(false);
   const [terminationReason, setTerminationReason] = useState(null);
 
-  // Screen Tracking State
+  // Screen Tracking & Privacy State
   const [isScreenTracking, setIsScreenTracking] = useState(false);
+  const [isDemoSimulation, setIsDemoSimulation] = useState(false);
+  const [screenCaptureError, setScreenCaptureError] = useState(null);
   const isScreenTrackingRef = useRef(false);
+  const isDemoSimulationRef = useRef(false);
   const drawIntervalRef = useRef(null);
+  const timerIntervalRef = useRef(null);
+  const beatIntervalRef = useRef(null);
   const [screenStream, setScreenStream] = useState(null);
   const [activeWindow, setActiveWindow] = useState('VS Code — inovex-workflow.ts');
   const [keystrokes, setKeystrokes] = useState(46);
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
 
-  // Synchronize ref with state
+  // Synchronize refs with state
   useEffect(() => {
     isScreenTrackingRef.current = isScreenTracking;
   }, [isScreenTracking]);
 
-  // Bind video element whenever screenStream or isScreenTracking changes
+  useEffect(() => {
+    isDemoSimulationRef.current = isDemoSimulation;
+  }, [isDemoSimulation]);
+
+  // Comprehensive cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (drawIntervalRef.current) clearInterval(drawIntervalRef.current);
+      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+      if (beatIntervalRef.current) clearInterval(beatIntervalRef.current);
+      if (screenStream) {
+        screenStream.getTracks().forEach(track => track.stop());
+      }
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        try { mediaRecorderRef.current.stop(); } catch (e) {}
+      }
+      if (wakeLockRef.current) {
+        try { wakeLockRef.current.release(); } catch (e) {}
+      }
+    };
+  }, [screenStream]);
+
+  // Bind video element whenever screenStream changes
   useEffect(() => {
     if (videoRef.current && screenStream) {
       videoRef.current.srcObject = screenStream;
       videoRef.current.play().catch(() => {});
     }
-  }, [screenStream, isScreenTracking]);
+  }, [screenStream]);
 
   // Proof-of-Work form state
   const [prUrl, setPrUrl] = useState('');
@@ -120,15 +148,14 @@ export function EmployeeWorkspace({
 
           // If sprint was started and status is active
           if (task.sprint_started_at && task.status === 'active' && task.session_terminated !== 1) {
-            const elapsed = Math.floor((Date.now() - task.sprint_started_at) / 1000);
-            const remaining = Math.max(0, 5400 - elapsed);
+            targetEndTimeRef.current = task.sprint_started_at + 5400 * 1000;
+            const remaining = Math.max(0, Math.round((targetEndTimeRef.current - Date.now()) / 1000));
             setSecondsRemaining(remaining);
 
             if (remaining > 0) {
               setIsTimerRunning(true);
-              setIsScreenTracking(true);
+              // Do NOT claim isScreenTracking is true on refresh without an active media stream
             } else {
-              // 90 minutes elapsed
               setIsTimerRunning(false);
               setIsTimerExpired(true);
               setIsScreenTracking(false);
@@ -168,40 +195,38 @@ export function EmployeeWorkspace({
     }
   }, [lastWsEvent, currentUser.id]);
 
-  // Fixed 90-Minute Countdown Interval (Cannot pause or cancel once started)
+  // Timestamp-based 90-Minute Countdown (Immune to browser background throttle and drift)
   useEffect(() => {
     if (!isTimerRunning || isTerminated) return;
 
-    let tick = 0;
-    const interval = setInterval(() => {
-      tick++;
-      setSecondsRemaining(prev => {
-        if (prev <= 1) {
-          clearInterval(interval);
-          handleTimerComplete();
-          return 0;
-        }
-        return prev - 1;
-      });
+    const updateTimer = () => {
+      if (!targetEndTimeRef.current) return;
+      const remaining = Math.max(0, Math.round((targetEndTimeRef.current - Date.now()) / 1000));
+      setSecondsRemaining(remaining);
 
-      // Transmit sub-second telemetry beat every 4 seconds to Founder Dashboard
-      if (tick % 4 === 0) {
-        const nextKps = Math.max(16, Math.min(88, keystrokes + (Math.random() > 0.5 ? 3 : -3)));
-        setKeystrokes(nextKps);
-        sendTelemetryBeat(
-          currentUser.id,
-          workspaceData?.task?.id || null,
-          activeWindow,
-          nextKps,
-          0
-        ).catch(() => {});
+      if (remaining <= 0) {
+        if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+        handleTimerComplete();
       }
-    }, 1000);
+    };
 
-    return () => clearInterval(interval);
-  }, [isTimerRunning, isTerminated, keystrokes, activeWindow, workspaceData?.task?.id, currentUser?.id]);
+    updateTimer();
+    timerIntervalRef.current = setInterval(updateTimer, 1000);
 
-  // Screen tracking live telemetry heartbeat (works even if sprint timer isn't running)
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        updateTimer();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+
+    return () => {
+      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [isTimerRunning, isTerminated]);
+
+  // Telemetry heartbeat interval (transmits activity beats when tracking is armed)
   useEffect(() => {
     if (!isScreenTracking || isTerminated) return;
 
@@ -213,7 +238,7 @@ export function EmployeeWorkspace({
       0
     ).catch(() => {});
 
-    const beatInterval = setInterval(() => {
+    beatIntervalRef.current = setInterval(() => {
       const nextKps = Math.max(18, Math.min(92, keystrokes + (Math.random() > 0.5 ? 4 : -4)));
       setKeystrokes(nextKps);
       sendTelemetryBeat(
@@ -225,10 +250,12 @@ export function EmployeeWorkspace({
       ).catch(() => {});
     }, 4000);
 
-    return () => clearInterval(beatInterval);
+    return () => {
+      if (beatIntervalRef.current) clearInterval(beatIntervalRef.current);
+    };
   }, [isScreenTracking, isTerminated, activeWindow, workspaceData?.task?.id, currentUser?.id]);
 
-  // Decoupled lightweight background recorder (preserves 60 FPS live preview with 0ms delay)
+  // MediaRecorder for capturing sprint video
   const startRecordingStream = (stream) => {
     try {
       recordedChunksRef.current = [];
@@ -240,7 +267,7 @@ export function EmployeeWorkspace({
 
       const options = {
         mimeType,
-        videoBitsPerSecond: 800000 // 800 kbps: low CPU consumption, buttery 60 FPS scanout
+        videoBitsPerSecond: 800000
       };
 
       const recorder = new MediaRecorder(stream, options);
@@ -252,25 +279,23 @@ export function EmployeeWorkspace({
       recorder.onstop = () => {
         uploadRecordedVideo();
       };
-      recorder.start(4000); // 4-second chunk intervals
+      recorder.start(4000);
       mediaRecorderRef.current = recorder;
     } catch (err) {
       console.warn('MediaRecorder error:', err);
     }
   };
 
-  // Upload finalized 90-minute video to backend for AI Agent Anomaly Audit
+  // Upload finalized sprint video to backend for AI Agent Anomaly Audit
   const uploadRecordedVideo = async () => {
+    if (recordedChunksRef.current.length === 0) {
+      console.warn('Sprint finished with no recorded video chunks; skipping empty upload.');
+      return;
+    }
+
     setIsUploadingRecording(true);
     try {
-      let videoBlob;
-      if (recordedChunksRef.current.length > 0) {
-        videoBlob = new Blob(recordedChunksRef.current, { type: 'video/webm' });
-      } else {
-        // Fallback synthetic video blob
-        videoBlob = new Blob(['INOVEX_SCREEN_STREAM_RECORDING'], { type: 'video/webm' });
-      }
-
+      const videoBlob = new Blob(recordedChunksRef.current, { type: 'video/webm' });
       const isMobile = /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent);
       const res = await uploadRecordingToSupabase(videoBlob, {
         userId: currentUser.id,
@@ -278,7 +303,8 @@ export function EmployeeWorkspace({
         taskId: workspaceData?.task?.id || '',
         deviceType: isMobile ? 'android' : 'desktop',
         durationSeconds: Math.max(30, 5400 - secondsRemaining),
-        warningCount: warningCount
+        warningCount: warningCount,
+        isDemoSimulation: isDemoSimulationRef.current
       });
 
       if (res && res.audit) {
@@ -291,20 +317,16 @@ export function EmployeeWorkspace({
     }
   };
 
-  // Handle 90-Minute Timer Completion (Reaches 00:00 -> auto turn off tracking)
+  // Handle 90-Minute Timer Completion
   const handleTimerComplete = async () => {
     setIsTimerRunning(false);
     setIsTimerExpired(true);
     setIsScreenTracking(false);
 
-    // Stop MediaRecorder (triggers uploadRecordedVideo)
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop();
-    } else {
-      uploadRecordedVideo();
     }
 
-    // Release mobile screen wake lock
     if (wakeLockRef.current) {
       wakeLockRef.current.release().catch(() => {});
       wakeLockRef.current = null;
@@ -314,7 +336,10 @@ export function EmployeeWorkspace({
       try {
         await fetch('/api/workspace/timer-complete', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 
+            'Content-Type': 'application/json',
+            ...(localStorage.getItem('invx_session_token') ? { 'Authorization': `Bearer ${localStorage.getItem('invx_session_token')}` } : {})
+          },
           body: JSON.stringify({
             taskId: workspaceData.task.id,
             userId: currentUser.id
@@ -324,22 +349,22 @@ export function EmployeeWorkspace({
     }
   };
 
-  // Start Sprint & Screen Tracking (90 minutes fixed)
+  // Start Sprint (90 minutes fixed)
   const executeStartSprint = async () => {
     try {
       const currentTaskId = workspaceData?.task?.id || null;
       const data = await startSprintSession(currentTaskId, currentUser.id);
       if (data && data.success) {
-        setSecondsRemaining(5400); // Exactly 90 minutes
+        targetEndTimeRef.current = Date.now() + 5400 * 1000;
+        setSecondsRemaining(5400);
         setIsTimerRunning(true);
-        setIsScreenTracking(true);
         setIsTimerExpired(false);
         setWarningCount(0);
         setWarningMessage(null);
         setIsTerminated(false);
         setAiAuditReport(null);
+        setScreenCaptureError(null);
 
-        // Keep mobile screen awake during the 90 minutes
         if ('wakeLock' in navigator) {
           try {
             wakeLockRef.current = await navigator.wakeLock.request('screen');
@@ -348,8 +373,8 @@ export function EmployeeWorkspace({
           }
         }
 
-        // Initiate screen capture stream and MediaRecorder
-        startScreenCapture();
+        // Request real screen capture
+        await startScreenCapture(false);
         fetchWorkspace();
       }
     } catch (err) {
@@ -357,43 +382,58 @@ export function EmployeeWorkspace({
     }
   };
 
-  // Zero-latency 60 FPS screen capture pipeline with direct hardware scanout
-  const startScreenCapture = async () => {
-    isScreenTrackingRef.current = true;
-    setIsScreenTracking(true);
+  // Screen capture pipeline with truthful error reporting and explicit demo simulation mode
+  const startScreenCapture = async (forceDemoMode = false) => {
+    setScreenCaptureError(null);
 
-    try {
-      if (navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) {
-        const stream = await navigator.mediaDevices.getDisplayMedia({
-          video: { 
-            displaySurface: 'monitor',
-            frameRate: { ideal: 60, max: 60 },
-            cursor: 'always'
-          },
-          audio: false // Strict audio: false bypasses browser audio mixing buffer delay
-        });
+    if (!forceDemoMode) {
+      try {
+        if (navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) {
+          const stream = await navigator.mediaDevices.getDisplayMedia({
+            video: { 
+              displaySurface: 'monitor',
+              frameRate: { ideal: 60, max: 60 },
+              cursor: 'always'
+            },
+            audio: false
+          });
 
-        setScreenStream(stream);
+          setIsDemoSimulation(false);
+          isDemoSimulationRef.current = false;
+          setScreenStream(stream);
+          isScreenTrackingRef.current = true;
+          setIsScreenTracking(true);
 
-        // Handle user stopping stream from native OS or browser toolbar
-        const videoTrack = stream.getVideoTracks()[0];
-        if (videoTrack) {
-          videoTrack.onended = () => {
-            isScreenTrackingRef.current = false;
-            setIsScreenTracking(false);
-            setScreenStream(null);
-          };
+          const videoTrack = stream.getVideoTracks()[0];
+          if (videoTrack) {
+            videoTrack.onended = () => {
+              isScreenTrackingRef.current = false;
+              setIsScreenTracking(false);
+              setScreenStream(null);
+            };
+          }
+
+          startRecordingStream(stream);
+          return stream;
+        } else {
+          setScreenCaptureError('DisplayMedia is not supported in this browser. You may use Demo Simulation Mode to verify workflows.');
+          return null;
         }
-
-        startRecordingStream(stream);
-        return stream;
+      } catch (err) {
+        console.warn('Screen capture permission declined:', err);
+        setScreenCaptureError('Screen capture permission was not granted. Inovex Sentinel requires screen authorization for verified monitoring. You can retry or engage Demo Simulation Mode.');
+        return null;
       }
-    } catch (e) {
-      console.log('Direct DisplayMedia bypassed or cancelled:', e);
     }
 
-    // High-frequency 60 FPS GPU canvas stream for Android mobile or virtual simulation
+    // Explicit Opt-In Demo Simulation Mode
     try {
+      setIsDemoSimulation(true);
+      isDemoSimulationRef.current = true;
+      isScreenTrackingRef.current = true;
+      setIsScreenTracking(true);
+      setScreenCaptureError(null);
+
       const canvas = document.createElement('canvas');
       canvas.width = 960;
       canvas.height = 540;
@@ -426,38 +466,38 @@ export function EmployeeWorkspace({
             ctx.stroke();
           }
 
-          ctx.fillStyle = '#8FA87B';
-          ctx.font = 'bold 16px "SF Mono", monospace';
-          ctx.fillText(`[INOVEX SENTINEL • 60 FPS HARDWARE ACCELERATED STREAM]`, 28, 48);
+          ctx.fillStyle = '#D97706';
+          ctx.font = 'bold 15px "SF Mono", monospace';
+          ctx.fillText(`[DEMO SIMULATION • NOT VERIFIED FOR REAL SPRINT EVIDENCE]`, 28, 48);
 
-          // Zero-delay latency badge
           ctx.fillStyle = '#3E8A5E';
-          ctx.fillRect(28, 70, 260, 28);
+          ctx.fillRect(28, 70, 310, 28);
           ctx.fillStyle = '#ffffff';
-          ctx.font = 'bold 12px "SF Mono", monospace';
-          ctx.fillText(`0.0ms DELAY • 60 FPS VSYNC PIPELINE`, 38, 89);
+          ctx.font = 'bold 11px "SF Mono", monospace';
+          ctx.fillText(`DEMO SIMULATION PIPELINE • SYNTHETIC PREVIEW`, 36, 89);
 
           ctx.fillStyle = '#EDF1E3';
           ctx.font = '14px "SF Mono", monospace';
           ctx.fillText(`Node: ${currentUser?.name || 'Employee'} (${currentUser?.device_mac_address || '00:00'})`, 28, 134);
-          ctx.fillText(`Focus: VS Code / IDE • Keystrokes: ${keystrokes} kpm`, 28, 164);
+          ctx.fillText(`Simulated Focus: VS Code • Velocity: ${keystrokes} kps`, 28, 164);
           ctx.fillText(`Frame Counter: #${frameCount} (Delta: ${frameDelta}ms)`, 28, 194);
           ctx.fillText(`Timestamp: ${new Date().toISOString()}`, 28, 224);
 
-          ctx.fillStyle = '#3E8A5E';
+          ctx.fillStyle = '#D97706';
           ctx.beginPath();
           ctx.arc(36, 262, 6, 0, Math.PI * 2);
           ctx.fill();
-          ctx.fillText(`AI Telemetry Integrity: 100% (Sub-Millisecond Active)`, 52, 266);
-        }, 16); // 16.6ms matches hardware 60 FPS vsync
+          ctx.fillText(`Status: Simulated Demonstration Mode Only`, 52, 266);
+        }, 33); // 30 FPS for simulation
 
         drawIntervalRef.current = drawInterval;
-        const syntheticStream = canvas.captureStream(60);
+        const syntheticStream = canvas.captureStream(30);
         setScreenStream(syntheticStream);
         startRecordingStream(syntheticStream);
+        return syntheticStream;
       }
     } catch (err) {
-      console.log('Mobile stream generator engaged', err);
+      console.error('Demo simulation stream error', err);
     }
   };
 
@@ -466,6 +506,8 @@ export function EmployeeWorkspace({
     if (isScreenTrackingRef.current) {
       isScreenTrackingRef.current = false;
       setIsScreenTracking(false);
+      setIsDemoSimulation(false);
+      isDemoSimulationRef.current = false;
       if (drawIntervalRef.current) {
         clearInterval(drawIntervalRef.current);
         drawIntervalRef.current = null;
@@ -475,14 +517,11 @@ export function EmployeeWorkspace({
       }
       setScreenStream(null);
 
-      // Finalize recording and generate post-monitoring AI audit
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
         mediaRecorderRef.current.stop();
-      } else {
-        uploadRecordedVideo();
       }
     } else {
-      startScreenCapture();
+      startScreenCapture(false);
     }
   };
 
@@ -561,13 +600,13 @@ export function EmployeeWorkspace({
     return `${m}:${s}`;
   };
 
-  // Employee action: mark assigned task as completed
+  // Employee action: mark assigned task as submitted for verification/review
   const handleMarkTaskDone = async (taskId) => {
     try {
-      await updateTaskStatus(taskId, 'done', 'Completed by employee directive execution', currentUser.id);
+      await updateTaskStatus(taskId, 'review', 'Completed by employee directive execution', currentUser.id);
       fetchWorkspace();
     } catch (err) {
-      console.error('Failed to mark task as done', err);
+      console.error('Failed to mark task as review', err);
     }
   };
 
@@ -996,12 +1035,84 @@ export function EmployeeWorkspace({
                   {isScreenTracking ? <Square size={11} /> : <Play size={11} />}
                   <span>{isScreenTracking ? 'Stop Monitor' : 'One-Click Live Monitor'}</span>
                 </button>
-                <span className={`badge ${isScreenTracking ? 'active' : 'waiting'}`}>
-                  <span className="badge-dot" style={{ background: isScreenTracking ? 'var(--status-green)' : 'var(--muted)' }}></span>
-                  {isScreenTracking ? 'Rec • 60 FPS Live' : 'Tracking Off'}
+                <span className={`badge ${isScreenTracking ? 'active' : 'waiting'}`} style={{
+                  borderColor: isDemoSimulation ? 'rgba(217, 119, 6, 0.4)' : undefined,
+                  color: isDemoSimulation ? '#D97706' : undefined
+                }}>
+                  <span className="badge-dot" style={{ background: isDemoSimulation ? '#D97706' : isScreenTracking ? 'var(--status-green)' : 'var(--muted)' }}></span>
+                  {isScreenTracking ? (isDemoSimulation ? 'Demo Simulation' : 'Rec • 60 FPS Live') : 'Tracking Off'}
                 </span>
               </div>
             </div>
+
+            {/* Screen Stream Disconnected Warning (e.g. after refresh during active sprint) */}
+            {isTimerRunning && !isScreenTracking && !screenStream && (
+              <div style={{
+                background: 'var(--status-amber-bg)',
+                border: '1px solid rgba(179, 104, 41, 0.3)',
+                borderLeft: '4px solid var(--status-amber)',
+                borderRadius: '6px',
+                padding: '10px 14px',
+                marginBottom: '12px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '10px',
+                fontSize: '12px'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--status-amber)' }}>
+                  <AlertTriangle size={15} style={{ flexShrink: 0 }} />
+                  <span>Sprint timer is running, but screen stream is detached. Re-attach to record evidence.</span>
+                </div>
+                <button 
+                  type="button"
+                  className="btn btn-primary"
+                  style={{ fontSize: '11px', padding: '4px 10px', flexShrink: 0 }}
+                  onClick={() => startScreenCapture(false)}
+                >
+                  Attach Screen Stream
+                </button>
+              </div>
+            )}
+
+            {/* Truthful Screen Capture Permission Error with Explicit Demo Opt-In */}
+            {screenCaptureError && (
+              <div style={{
+                background: 'var(--status-amber-bg)',
+                border: '1px solid rgba(179, 104, 41, 0.3)',
+                borderLeft: '4px solid var(--status-amber)',
+                borderRadius: '6px',
+                padding: '10px 14px',
+                marginBottom: '12px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '8px',
+                fontSize: '12px'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--status-amber)' }}>
+                  <AlertTriangle size={15} style={{ flexShrink: 0 }} />
+                  <span>{screenCaptureError}</span>
+                </div>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button 
+                    type="button" 
+                    className="btn btn-primary"
+                    style={{ fontSize: '11px', padding: '4px 10px' }}
+                    onClick={() => startScreenCapture(false)}
+                  >
+                    Retry Capture
+                  </button>
+                  <button 
+                    type="button" 
+                    className="btn btn-secondary"
+                    style={{ fontSize: '11px', padding: '4px 10px' }}
+                    onClick={() => startScreenCapture(true)}
+                  >
+                    Engage Demo Mode
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* Live Video / Canvas Screen Preview */}
             <div style={{
@@ -1092,8 +1203,8 @@ export function EmployeeWorkspace({
                   gap: '6px',
                   border: '1px solid rgba(255, 255, 255, 0.1)'
                 }}>
-                  <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--status-green)' }}></span>
-                  <span>0.0ms DELAY • 60 FPS GPU SCANOUT</span>
+                  <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: isDemoSimulation ? '#D97706' : 'var(--status-green)' }}></span>
+                  <span>{isDemoSimulation ? 'DEMO SIMULATION • NOT PRODUCTION EVIDENCE' : '0.0ms DELAY • 60 FPS GPU SCANOUT'}</span>
                 </div>
               )}
             </div>

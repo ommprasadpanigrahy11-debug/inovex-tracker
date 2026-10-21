@@ -8,6 +8,18 @@ import fs from 'node:fs';
 import os from 'node:os';
 import multer from 'multer';
 import db from './db.js';
+import { 
+  hashPassword, 
+  verifyPassword, 
+  generateSalt, 
+  createSession, 
+  validateSessionToken, 
+  revokeSession, 
+  requireAuth, 
+  requireFounder, 
+  createRateLimiter, 
+  BOOTSTRAP_FOUNDER_KEY 
+} from './auth.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -18,192 +30,457 @@ if (!fs.existsSync(recordingsDir)) {
   fs.mkdirSync(recordingsDir, { recursive: true });
 }
 
-// Multer storage for 90-minute recordings from Android and Desktop clients
+// Multer storage for 90-minute recordings with strict validation
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, recordingsDir);
   },
   filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname) || '.webm';
+    const safeExt = path.extname(file.originalname).toLowerCase();
+    const allowedExts = ['.webm', '.mp4', '.ogg', '.mkv'];
+    const ext = allowedExts.includes(safeExt) ? safeExt : '.webm';
     const timestamp = Date.now();
-    const userId = req.body?.userId || 'unknown';
-    cb(null, `sprint_${userId}_${timestamp}${ext}`);
+    const userId = req.user?.id || req.body?.userId || 'node';
+    const safeUserId = String(userId).replace(/[^a-zA-Z0-9_-]/g, '');
+    cb(null, `sprint_${safeUserId}_${timestamp}${ext}`);
   }
 });
+
 const upload = multer({ 
   storage, 
-  limits: { fileSize: 500 * 1024 * 1024 } // 500MB max per recording
+  limits: { fileSize: 100 * 1024 * 1024 }, // 100MB max per recording
+  fileFilter: (req, file, cb) => {
+    const allowedMimes = ['video/webm', 'video/mp4', 'video/ogg', 'video/x-matroska', 'application/octet-stream'];
+    if (allowedMimes.includes(file.mimetype) || file.originalname.endsWith('.webm') || file.originalname.endsWith('.mp4')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Invalid video format. Only WebM, MP4, or MKV screen recordings are supported.'));
+    }
+  }
 });
 
 const app = express();
 const port = process.env.PORT || 5000;
 
-app.use(cors());
-app.use(express.json());
-// Serve recorded videos so Founders can stream/play them
-app.use('/recordings', express.static(recordingsDir));
+// Security Headers Middleware
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), display-capture=(self)');
+  next();
+});
+
+// CORS Configuration
+const allowedOrigin = process.env.ALLOWED_ORIGIN || '*';
+app.use(cors({
+  origin: allowedOrigin === '*' ? true : allowedOrigin,
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Session-Token']
+}));
+
+app.use(express.json({ limit: '2mb' }));
+
+// Rate Limiters
+const authLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 30, message: 'Too many authentication attempts. Please try again later.' });
+const uploadLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 10, message: 'Recording upload rate limit reached. Please wait a moment.' });
+
+// Protected Video Stream Endpoint (Prevents unauthorized public access to employee screen recordings)
+app.get('/recordings/:filename', (req, res) => {
+  const rawFilename = req.params.filename;
+  const safeFilename = path.basename(rawFilename); // Prevent path traversal (../)
+  const filePath = path.join(recordingsDir, safeFilename);
+
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: 'Recording file not found.' });
+  }
+
+  // Authorize request via Token in Query or Header
+  const token = req.query.token || req.headers['authorization']?.replace('Bearer ', '') || req.headers['x-session-token'];
+  const user = validateSessionToken(token);
+
+  if (!user) {
+    return res.status(401).json({ error: 'Authentication required to stream recording artifacts.' });
+  }
+
+  // Employees can only view their own recordings; Founders can view all
+  if (user.role !== 'founder') {
+    const audit = db.prepare('SELECT user_id FROM sprint_audits WHERE video_filename = ? OR video_url LIKE ?').get(safeFilename, `%${safeFilename}`);
+    if (audit && audit.user_id !== user.id) {
+      return res.status(403).json({ error: 'Access denied: You are not authorized to view this employee recording.' });
+    }
+  }
+
+  // Stream video with HTTP Range Support for smooth seeking
+  const stat = fs.statSync(filePath);
+  const fileSize = stat.size;
+  const range = req.headers.range;
+
+  if (range) {
+    const parts = range.replace(/bytes=/, "").split("-");
+    const start = parseInt(parts[0], 10);
+    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+    const chunksize = (end - start) + 1;
+    const file = fs.createReadStream(filePath, { start, end });
+    const head = {
+      'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+      'Accept-Ranges': 'bytes',
+      'Content-Length': chunksize,
+      'Content-Type': safeFilename.endsWith('.mp4') ? 'video/mp4' : 'video/webm',
+    };
+    res.writeHead(206, head);
+    file.pipe(res);
+  } else {
+    const head = {
+      'Content-Length': fileSize,
+      'Content-Type': safeFilename.endsWith('.mp4') ? 'video/mp4' : 'video/webm',
+      'Accept-Ranges': 'bytes'
+    };
+    res.writeHead(200, head);
+    fs.createReadStream(filePath).pipe(res);
+  }
+});
 
 const server = createServer(app);
 const wss = new WebSocketServer({ server });
 
-// WebSocket broadcasting helper
-function broadcast(eventType, data) {
+// Secure WebSocket broadcasting helper with role-based filtering
+function broadcast(eventType, data, options = {}) {
   const payload = JSON.stringify({ type: eventType, data, timestamp: Date.now() });
+  const { founderOnly = false, recipientUserId = null } = options;
+
   wss.clients.forEach(client => {
     if (client.readyState === WebSocket.OPEN) {
+      // Role filtering
+      if (founderOnly && client.user?.role !== 'founder') {
+        return;
+      }
+      // Specific employee filtering
+      if (recipientUserId && client.user?.role !== 'founder' && client.user?.id !== recipientUserId) {
+        return;
+      }
       client.send(payload);
     }
   });
 }
 
-wss.on('connection', (ws) => {
-  ws.send(JSON.stringify({ type: 'CONNECTED', message: 'Antigravity Telemetry Socket Active', timestamp: Date.now() }));
+// Authenticated WebSocket connection handler
+wss.on('connection', (ws, req) => {
+  try {
+    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    const token = url.searchParams.get('token');
+    const user = validateSessionToken(token);
+
+    if (user) {
+      ws.user = user;
+      ws.send(JSON.stringify({ 
+        type: 'CONNECTED', 
+        message: `Antigravity Telemetry Socket Active. Authenticated as ${user.name} (${user.role.toUpperCase()})`,
+        user: { id: user.id, name: user.name, role: user.role },
+        timestamp: Date.now() 
+      }));
+    } else {
+      // Allow unauthenticated connection only in dev/demo mode, but tag as unauthenticated
+      ws.user = null;
+      ws.send(JSON.stringify({ 
+        type: 'CONNECTED', 
+        message: 'Telemetry Socket Connected in Limited Mode (Unauthenticated)', 
+        timestamp: Date.now() 
+      }));
+    }
+  } catch (err) {
+    ws.send(JSON.stringify({ type: 'CONNECTED', message: 'Socket Active', timestamp: Date.now() }));
+  }
+});
+
+// Helper: Auto-evaluate task deadlines and mark overdue uncompleted tasks as 'failed'
+function autoCheckDeadlines() {
+  try {
+    const now = Date.now();
+    const tasks = db.prepare(`
+      SELECT * FROM tasks 
+      WHERE deadline IS NOT NULL 
+        AND status NOT IN ('verified', 'failed', 'rejected')
+    `).all();
+
+    for (const t of tasks) {
+      const deadlineMs = Number(t.deadline) || new Date(t.deadline).getTime();
+      if (deadlineMs && now > deadlineMs) {
+        db.prepare(`UPDATE tasks SET status = 'failed' WHERE id = ?`).run(t.id);
+        broadcast('TASK_STATUS_UPDATED', {
+          taskId: t.id,
+          status: 'failed',
+          assigned_to: t.assigned_to,
+          reason: 'Time limit exceeded without completion (Auto-marked as Task Failed)'
+        });
+      }
+    }
+  } catch (e) {
+    // Non-blocking
+  }
+}
+
+// -------------------------------------------------------------
+// 1. HEALTH AND NETWORK DISCOVERY ENDPOINTS
+// -------------------------------------------------------------
+app.get('/api/health', (req, res) => {
+  try {
+    const userCount = db.prepare('SELECT COUNT(*) as count FROM users').get().count;
+    const taskCount = db.prepare('SELECT COUNT(*) as count FROM tasks').get().count;
+    res.json({
+      status: 'healthy',
+      timestamp: Date.now(),
+      service: 'Inovex Operations Sentinel',
+      nodeEnv: process.env.NODE_ENV || 'production',
+      metrics: { userCount, taskCount }
+    });
+  } catch (err) {
+    res.status(500).json({ status: 'unhealthy', error: err.message });
+  }
+});
+
+app.get('/api/system/network-info', (req, res) => {
+  try {
+    const nets = os.networkInterfaces();
+    const addresses = [];
+    let bestIp = 'localhost';
+
+    for (const name of Object.keys(nets)) {
+      for (const net of nets[name]) {
+        if (net.family === 'IPv4' && !net.internal) {
+          addresses.push({
+            interface: name,
+            ip: net.address,
+            url: `http://${net.address}:${port}`
+          });
+          if (bestIp === 'localhost') bestIp = net.address;
+        }
+      }
+    }
+
+    res.json({
+      success: true,
+      port,
+      ip: bestIp,
+      localUrl: `http://localhost:${port}`,
+      networkAddresses: addresses,
+      defaultNetworkUrl: addresses.length > 0 ? addresses[0].url : `http://localhost:${port}`,
+      pwaReady: true
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // -------------------------------------------------------------
-// 1. AUTHENTICATION & RBAC LAYER
-// Total User Cap: exactly 6 accounts. Query role & route.
+// 2. AUTHENTICATION & SESSION MANAGEMENT
 // -------------------------------------------------------------
-app.get('/api/users', (req, res) => {
+app.post('/api/auth/login', authLimiter, (req, res) => {
+  const { email, password, userId } = req.body;
   try {
-    const users = db.prepare('SELECT id, name, role, email, skill_set, device_mac_address, biometric_passkey_id, biometric_enrolled, is_active FROM users ORDER BY role DESC, id ASC').all();
+    if (!email && !userId) {
+      return res.status(400).json({ error: 'Authorized email address is required.' });
+    }
+    if (!password) {
+      return res.status(400).json({ error: 'Password is required.' });
+    }
+
+    let user = null;
+    if (email && String(email).trim()) {
+      const cleanEmail = String(email).trim().toLowerCase();
+      user = db.prepare('SELECT * FROM users WHERE LOWER(email) = ? OR id = ?').get(cleanEmail, cleanEmail);
+    } else if (userId) {
+      user = db.prepare('SELECT * FROM users WHERE id = ?').get(String(userId).trim());
+    }
+
+    if (!user) {
+      return res.status(401).json({ error: 'Access Denied: No authorized account found for this email address.' });
+    }
+
+    // Verify salted hashed password
+    const enteredPass = String(password).trim();
+    let isPasswordValid = false;
+
+    if (user.password_hash && user.password_salt) {
+      isPasswordValid = verifyPassword(enteredPass, user.password_hash, user.password_salt);
+    }
+
+    if (!isPasswordValid) {
+      return res.status(401).json({ error: 'Access Denied: Invalid password for this authorized user.' });
+    }
+
+    // Generate secure session token
+    const { token, expiresAt } = createSession(user.id, req);
+
+    // Sanitize user object (NEVER return password hashes or salts to client)
+    const sanitizedUser = {
+      id: user.id,
+      name: user.name,
+      role: user.role,
+      email: user.email,
+      skill_set: user.skill_set,
+      device_mac_address: user.device_mac_address,
+      is_active: user.is_active,
+      last_seen_at: Date.now()
+    };
+
+    const route = user.role === 'founder' ? '/admin-dashboard' : '/workspace';
+
+    res.json({
+      success: true,
+      token,
+      expiresAt,
+      user: sanitizedUser,
+      route,
+      message: `Authenticated as ${user.name} (${user.role.toUpperCase()})`
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Internal authentication error. Please retry.' });
+  }
+});
+
+app.get('/api/auth/me', requireAuth, (req, res) => {
+  res.json({
+    success: true,
+    user: req.user
+  });
+});
+
+app.post('/api/auth/logout', requireAuth, (req, res) => {
+  try {
+    revokeSession(req.sessionToken);
+    res.json({ success: true, message: 'Session terminated successfully.' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/users/register', authLimiter, (req, res) => {
+  const { id, name, email, password, role, skill_set, device_mac_address, bootstrapKey } = req.body;
+  try {
+    if (!email || !email.trim()) {
+      return res.status(400).json({ error: 'Valid email address is required to register an account.' });
+    }
+    if (!password || !password.trim()) {
+      return res.status(400).json({ error: 'Password is required to register an account.' });
+    }
+    if (password.trim().length < 4) {
+      return res.status(400).json({ error: 'Password must be at least 4 characters long.' });
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+
+    // Check if account already exists - PREVENT ACCOUNT TAKEOVER
+    const existing = db.prepare('SELECT id FROM users WHERE LOWER(email) = ?').get(cleanEmail);
+    if (existing) {
+      return res.status(409).json({ error: 'An account with this email address already exists. Please sign in instead.' });
+    }
+
+    // Role Enforcement:
+    // Self-registration as 'founder' is ONLY permitted if there are 0 users in the system (bootstrap)
+    // OR if a valid initial bootstrap key is provided. Otherwise, role is strictly 'employee'.
+    const userCount = db.prepare('SELECT COUNT(*) as count FROM users').get().count;
+    let targetRole = 'employee';
+
+    if (role === 'founder') {
+      const isZeroUsers = userCount === 0;
+      const isValidBootstrap = bootstrapKey && bootstrapKey === BOOTSTRAP_FOUNDER_KEY;
+
+      // Check if acting user is an authenticated founder registering an account
+      const authHeader = req.headers['authorization']?.replace('Bearer ', '');
+      const actingUser = authHeader ? validateSessionToken(authHeader) : null;
+      const isRegisteredByFounder = actingUser && actingUser.role === 'founder';
+
+      if (isZeroUsers || isValidBootstrap || isRegisteredByFounder) {
+        targetRole = 'founder';
+      } else {
+        return res.status(403).json({ 
+          error: 'Founder self-registration is restricted. Contact an authorized Executive Founder or provide an authorization bootstrap key.' 
+        });
+      }
+    }
+
+    const cleanMac = (device_mac_address && String(device_mac_address).trim()) || 'A4:C1:38:9B:21:40';
+    const cleanName = (name && String(name).trim()) || (targetRole === 'founder' ? 'Executive Founder' : 'Engineering Operator');
+    const cleanSkill = (skill_set && String(skill_set).trim()) || (targetRole === 'founder' ? 'Executive Director' : 'General Engineering');
+
+    // Generate secure password salt & hash
+    const salt = generateSalt();
+    const hash = hashPassword(password.trim(), salt);
+
+    const userId = id || ('usr_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 6));
+    const now = Date.now();
+
+    db.prepare(`
+      INSERT INTO users (id, name, role, device_mac_address, is_active, email, password_hash, password_salt, skill_set, last_seen_at, created_at)
+      VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
+    `).run(userId, cleanName, targetRole, cleanMac, cleanEmail, hash, salt, cleanSkill, now, now);
+
+    const sanitizedUser = {
+      id: userId,
+      name: cleanName,
+      role: targetRole,
+      email: cleanEmail,
+      skill_set: cleanSkill,
+      device_mac_address: cleanMac,
+      is_active: 1,
+      last_seen_at: now
+    };
+
+    // Auto-create session
+    const { token, expiresAt } = createSession(userId, req);
+
+    broadcast('NODE_REGISTERED', { user: sanitizedUser });
+
+    res.json({ 
+      success: true, 
+      token,
+      expiresAt,
+      user: sanitizedUser 
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Registration error.' });
+  }
+});
+
+// User Directory: Authenticated access only
+app.get('/api/users', requireAuth, (req, res) => {
+  try {
+    const isFounderUser = req.user.role === 'founder';
+    
+    // Update caller's last seen
+    db.prepare('UPDATE users SET last_seen_at = ? WHERE id = ?').run(Date.now(), req.user.id);
+
+    // Return sanitized directory (NEVER passwords)
+    let users;
+    if (isFounderUser) {
+      users = db.prepare('SELECT id, name, role, email, skill_set, device_mac_address, is_active, last_seen_at FROM users ORDER BY role DESC, id ASC').all();
+    } else {
+      users = db.prepare('SELECT id, name, role, email, skill_set, is_active, last_seen_at FROM users ORDER BY role DESC, id ASC').all();
+    }
+
     res.json(users);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Network info endpoint: provides LAN IPv4 address so phone QR scanning works on real devices
-app.get('/api/system/network-info', (req, res) => {
-  try {
-    const interfaces = os.networkInterfaces();
-    let bestIp = 'localhost';
-    
-    for (const name of Object.keys(interfaces)) {
-      for (const iface of interfaces[name]) {
-        if (iface.family === 'IPv4' && !iface.internal) {
-          bestIp = iface.address;
-          break;
-        }
-      }
-      if (bestIp !== 'localhost') break;
-    }
-    
-    const port = process.env.PORT || 5000;
-    const defaultNetworkUrl = `http://${bestIp}:${port}`;
-    res.json({
-      success: true,
-      ip: bestIp,
-      port,
-      defaultNetworkUrl,
-      localUrl: `http://localhost:${port}`
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/users/register', (req, res) => {
-  const { id, name, email, password, role, skill_set, device_mac_address } = req.body;
-  try {
-    if (!email || !email.trim()) {
-      return res.status(400).json({ error: 'Valid authorized email address is required to register an account.' });
-    }
-    if (!password || !password.trim()) {
-      return res.status(400).json({ error: 'Password is required to register an account.' });
-    }
-    if (!skill_set || !skill_set.trim()) {
-      return res.status(400).json({ error: 'Skill set is required (displayed on Orchestration Grid).' });
-    }
-
-    const cleanEmail = email.trim().toLowerCase();
-    const cleanRole = role === 'founder' ? 'founder' : 'employee';
-    const cleanMac = device_mac_address || 'A4:C1:38:9B:21:40';
-    const cleanName = (name || (cleanRole === 'founder' ? 'Executive Founder' : 'Engineering Operator')).trim();
-    const cleanSkill = skill_set.trim();
-    const cleanPass = password.trim();
-
-    const existing = db.prepare('SELECT * FROM users WHERE LOWER(email) = ?').get(cleanEmail);
-    if (existing) {
-      db.prepare(`
-        UPDATE users 
-        SET name = ?, role = ?, device_mac_address = ?, password = ?, skill_set = ?
-        WHERE id = ?
-      `).run(cleanName, cleanRole, cleanMac, cleanPass, cleanSkill, existing.id);
-      const updatedUser = db.prepare('SELECT id, name, role, email, skill_set, device_mac_address, is_active FROM users WHERE id = ?').get(existing.id);
-      broadcast('NODE_REGISTERED', { user: updatedUser });
-      return res.json({ success: true, user: updatedUser });
-    }
-
-    const userId = id || ('usr_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 6));
-
-    db.prepare(`
-      INSERT INTO users (id, name, role, device_mac_address, is_active, email, password, skill_set)
-      VALUES (?, ?, ?, ?, 1, ?, ?, ?)
-    `).run(userId, cleanName, cleanRole, cleanMac, cleanEmail, cleanPass, cleanSkill);
-
-    const user = db.prepare('SELECT id, name, role, email, skill_set, device_mac_address, is_active FROM users WHERE id = ?').get(userId);
-    broadcast('NODE_REGISTERED', { user });
-    res.json({ success: true, user });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// STRICT AUTHENTICATION: Authorized Email & Password verification with role-based routing
-app.post('/api/auth/login', (req, res) => {
-  const { userId, email, password } = req.body;
-  try {
-    let user = null;
-    if (email && email.trim()) {
-      const cleanEmail = email.trim().toLowerCase();
-      user = db.prepare('SELECT * FROM users WHERE LOWER(email) = ? OR id = ?').get(cleanEmail, cleanEmail);
-    } else if (userId) {
-      user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
-    }
-
-    if (!user) {
-      return res.status(401).json({ 
-        error: 'Access Denied: No authorized account found for this email address.' 
-      });
-    }
-
-    // Verify Password
-    const enteredPass = password ? String(password).trim() : '';
-    const storedPass = user.password ? String(user.password).trim() : '';
-    const isMasterPass = (user.role === 'founder' && enteredPass === '9901') || (user.role === 'employee' && enteredPass === '1042');
-    const isPasswordValid = storedPass ? (enteredPass === storedPass || isMasterPass) : isMasterPass;
-
-    if (!isPasswordValid) {
-      return res.status(401).json({ 
-        error: 'Access Denied: Invalid password for this authorized user.' 
-      });
-    }
-
-    const route = user.role === 'founder' ? '/admin-dashboard' : '/workspace';
-    res.json({
-      success: true,
-      user,
-      route,
-      message: `Authenticated as ${user.name} (${user.role.toUpperCase()})`
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // -------------------------------------------------------------
-// 2. FOUNDER VIEW: Orchestration Grid & Live Telemetry Feed
+// 3. FOUNDER VIEW: Orchestration Grid & Live Telemetry Feed
 // -------------------------------------------------------------
-app.get('/api/admin/orchestration-grid', (req, res) => {
+app.get('/api/admin/orchestration-grid', requireAuth, requireFounder, (req, res) => {
   try {
-    const users = db.prepare('SELECT * FROM users ORDER BY role DESC, id ASC').all();
+    const now = Date.now();
+    const users = db.prepare('SELECT id, name, role, email, skill_set, device_mac_address, is_active, last_seen_at FROM users ORDER BY role DESC, id ASC').all();
 
     const grid = users.map(user => {
+      const isOnline = user.is_active && user.last_seen_at && (now - user.last_seen_at < 90000);
+
       if (user.role === 'founder') {
         return {
           ...user,
-          status: 'admin_active',
+          status: isOnline ? 'admin_active' : 'offline',
           mode: 'God-Mode Overseer',
           access_level: 'GLOBAL_READ_WRITE',
           active_task: null,
@@ -211,7 +488,7 @@ app.get('/api/admin/orchestration-grid', (req, res) => {
             active_window: 'Terminal - Multi-Agent Dispatcher',
             keystroke_rate: 0,
             hardware_spoof_flag: 0,
-            last_ping: Date.now()
+            last_ping: user.last_seen_at || now
           }
         };
       }
@@ -220,7 +497,12 @@ app.get('/api/admin/orchestration-grid', (req, res) => {
       const task = db.prepare(`
         SELECT * FROM tasks 
         WHERE assigned_to = ? 
-        ORDER BY created_at DESC LIMIT 1
+        ORDER BY CASE 
+          WHEN status = 'active' THEN 1 
+          WHEN status = 'pending' THEN 2 
+          WHEN status = 'review' THEN 3 
+          ELSE 4 END, 
+        created_at DESC LIMIT 1
       `).get(user.id);
 
       const latestLog = db.prepare(`
@@ -231,15 +513,15 @@ app.get('/api/admin/orchestration-grid', (req, res) => {
 
       return {
         ...user,
-        status: user.is_active ? 'online' : 'offline',
+        status: isOnline ? 'online' : 'offline',
         mode: 'Scoped Sprint Worker',
         access_level: 'SCOPED_EMPLOYEE',
         active_task: task || null,
         telemetry: latestLog || {
-          active_window: 'Desktop Idle',
+          active_window: isOnline ? 'Desktop Active' : 'Offline',
           keystroke_rate: 0,
           hardware_spoof_flag: 0,
-          timestamp: Date.now()
+          timestamp: user.last_seen_at || now
         }
       };
     });
@@ -251,7 +533,7 @@ app.get('/api/admin/orchestration-grid', (req, res) => {
 });
 
 // Live Telemetry Feed stream data
-app.get('/api/admin/telemetry-feed', (req, res) => {
+app.get('/api/admin/telemetry-feed', requireAuth, requireFounder, (req, res) => {
   try {
     const logs = db.prepare(`
       SELECT tl.*, u.name as user_name, u.role, t.title as task_title
@@ -259,7 +541,7 @@ app.get('/api/admin/telemetry-feed', (req, res) => {
       JOIN users u ON tl.user_id = u.id
       LEFT JOIN tasks t ON tl.task_id = t.id
       ORDER BY tl.timestamp DESC
-      LIMIT 25
+      LIMIT 35
     `).all();
     res.json(logs);
   } catch (err) {
@@ -268,7 +550,7 @@ app.get('/api/admin/telemetry-feed', (req, res) => {
 });
 
 // Predictive Health Matrix Table
-app.get('/api/admin/health-matrix', (req, res) => {
+app.get('/api/admin/health-matrix', requireAuth, requireFounder, (req, res) => {
   try {
     const matrix = db.prepare(`
       SELECT 
@@ -287,6 +569,7 @@ app.get('/api/admin/health-matrix', (req, res) => {
         (SELECT hardware_spoof_flag FROM telemetry_logs WHERE user_id = u.id ORDER BY timestamp DESC LIMIT 1) as hardware_spoof_flag
       FROM tasks t
       JOIN users u ON t.assigned_to = u.id
+      WHERE t.status IN ('pending', 'active', 'review')
       ORDER BY t.ai_health_score ASC
     `).all();
 
@@ -313,18 +596,16 @@ app.get('/api/admin/health-matrix', (req, res) => {
 });
 
 // -------------------------------------------------------------
-// 3. ACTION 1: INITIALIZE AI DISPATCH TERMINAL
-// Multi-Agent breakdown & routing to optimal employee
+// 4. FOUNDER TASK DISPATCH & ASSIGNMENT
 // -------------------------------------------------------------
-app.post('/api/tasks/ai-dispatch', (req, res) => {
+app.post('/api/tasks/ai-dispatch', requireAuth, requireFounder, (req, res) => {
   const { prompt } = req.body;
   if (!prompt || !prompt.trim()) {
     return res.status(400).json({ error: 'Raw project specification required.' });
   }
 
   try {
-    // Multi-agent breakdown logic
-    // 1. Find optimal employee with lowest active task burden & best telemetry health
+    // 1. Find optimal employee with lowest active task burden
     const employeeWorkloads = db.prepare(`
       SELECT u.id, u.name, 
         COUNT(CASE WHEN t.status IN ('pending', 'active') THEN 1 END) as active_count,
@@ -336,34 +617,35 @@ app.post('/api/tasks/ai-dispatch', (req, res) => {
       ORDER BY active_count ASC, avg_health DESC
     `).all();
 
-    const targetEmployee = employeeWorkloads[0] || { id: 'usr_emp_01', name: 'Alex Mercer' };
+    if (employeeWorkloads.length === 0) {
+      return res.status(400).json({ error: 'No active employee nodes registered. Please register an employee node first.' });
+    }
+
+    const targetEmployee = employeeWorkloads[0];
 
     // 2. Synthesize AI micro-sprint brief from prompt
-    const taskId = 'tsk_' + Math.random().toString(36).substring(2, 8);
-    const titleSnippet = prompt.split('\n')[0].substring(0, 48) || 'Autonomous Workflow Micro-Sprint';
-    const computedHealth = Math.floor(82 + Math.random() * 15); // Initial healthy pacing score
+    const taskId = 'tsk_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 6);
+    const titleSnippet = prompt.split('\n')[0].substring(0, 55).trim() || 'Autonomous Workflow Micro-Sprint';
+    const computedHealth = 95;
 
-    const briefContent = `[AUTONOMOUS DISPATCH DIRECTIVE]\nTarget: ${titleSnippet}\n\nSPECIFICATION:\n${prompt}\n\nEXECUTION CONSTRAINTS:\n- 90-minute strict checkpoint burst.\n- Real-time telemetry monitoring enabled.\n- GitHub PR or API payload submission required before checkpoint expiry.`;
-
+    const briefContent = `[AUTONOMOUS DISPATCH DIRECTIVE]\nTarget: ${titleSnippet}\n\nSPECIFICATION:\n${prompt}\n\nEXECUTION CONSTRAINTS:\n- 90-minute strict checkpoint burst.\n- Real-time telemetry monitoring enabled.\n- Proof submission required before checkpoint expiry.`;
     const webhookUrl = `https://api.lexven.internal/v1/pow-hook/${taskId}`;
 
-    const insertTask = db.prepare(`
+    db.prepare(`
       INSERT INTO tasks (
-        id, assigned_to, title, status, ai_health_score, proof_of_work_webhook,
-        checkpoint_timer, sprint_started_at, is_acknowledged, brief_content, created_at
-      ) VALUES (?, ?, ?, 'pending', ?, ?, 5400, NULL, 0, ?, ?)
-    `);
-
-    insertTask.run(taskId, targetEmployee.id, titleSnippet, computedHealth, webhookUrl, briefContent, Date.now());
+        id, assigned_to, title, description, brief_content, status, 
+        ai_health_score, proof_of_work_webhook, checkpoint_timer, 
+        sprint_started_at, is_acknowledged, created_at
+      ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, 5400, NULL, 0, ?)
+    `).run(taskId, targetEmployee.id, titleSnippet, prompt, briefContent, computedHealth, webhookUrl, Date.now());
 
     const createdTask = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
 
-    // Broadcast AI dispatch event to both Founder & Employee
     broadcast('TASK_DISPATCHED', {
       task: createdTask,
       assignedEmployee: targetEmployee,
       message: `AI Dispatch assigned micro-task to ${targetEmployee.name}`
-    });
+    }, { recipientUserId: targetEmployee.id });
 
     res.json({
       success: true,
@@ -372,7 +654,7 @@ app.post('/api/tasks/ai-dispatch', (req, res) => {
       task: createdTask,
       dispatchLog: [
         'Agent [Analyzer]: Deconstructed project specs into 1 micro-sprint burst.',
-        `Agent [Router]: Evaluated employee telemetry matrix. Assigned to ${targetEmployee.name}.`,
+        `Agent [Router]: Evaluated employee workload matrix. Assigned to ${targetEmployee.name}.`,
         `Agent [Sentinel]: Seeded 90-minute Checkpoint Timer with Webhook: ${webhookUrl}.`,
         'Status: Queued in employee workspace awaiting acceptance acknowledgment.'
       ]
@@ -382,43 +664,18 @@ app.post('/api/tasks/ai-dispatch', (req, res) => {
   }
 });
 
-// Helper: Auto-evaluate task deadlines and mark overdue uncompleted tasks as 'failed'
-function autoCheckDeadlines() {
-  try {
-    const now = Date.now();
-    const tasks = db.prepare(`
-      SELECT * FROM tasks 
-      WHERE deadline IS NOT NULL 
-        AND status NOT IN ('done', 'completed', 'verified', 'failed')
-    `).all();
-
-    for (const t of tasks) {
-      const deadlineMs = Number(t.deadline) || new Date(t.deadline).getTime();
-      if (deadlineMs && now > deadlineMs) {
-        db.prepare(`UPDATE tasks SET status = 'failed' WHERE id = ?`).run(t.id);
-        broadcast('TASK_STATUS_UPDATED', {
-          taskId: t.id,
-          status: 'failed',
-          assigned_to: t.assigned_to,
-          reason: 'Time limit exceeded without completion (Auto-marked as Task Failed)'
-        });
-      }
-    }
-  } catch (e) {
-    // Non-blocking
-  }
-}
-
-// -------------------------------------------------------------
-// 3B. MANUAL TASK ASSIGNMENT BY FOUNDER (Title + Description + Time Limit Deadline)
-// -------------------------------------------------------------
-app.post('/api/tasks/assign', (req, res) => {
+app.post('/api/tasks/assign', requireAuth, requireFounder, (req, res) => {
   const { title, description, deadline, assignedUserId } = req.body;
   if (!title || !title.trim() || !assignedUserId) {
     return res.status(400).json({ error: 'Task title and assigned employee are required.' });
   }
 
   try {
+    const employee = db.prepare('SELECT id, name, role, device_mac_address FROM users WHERE id = ?').get(assignedUserId);
+    if (!employee || employee.role !== 'employee') {
+      return res.status(400).json({ error: 'Assigned user must be an active employee node.' });
+    }
+
     const taskId = 'tsk_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 6);
     const cleanTitle = title.trim();
     const cleanDesc = (description || '').trim();
@@ -445,13 +702,12 @@ app.post('/api/tasks/assign', (req, res) => {
     );
 
     const createdTask = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
-    const employee = db.prepare('SELECT id, name, role, device_mac_address FROM users WHERE id = ?').get(assignedUserId);
 
     broadcast('TASK_ASSIGNED', {
       task: createdTask,
       assignedEmployee: employee,
-      message: `Founder assigned new task: "${cleanTitle}" to ${employee?.name || 'employee'}. Time limit deadline: ${deadline || 'Flexible'}`
-    });
+      message: `Founder assigned new task: "${cleanTitle}" to ${employee.name}. Time limit deadline: ${deadline || 'Flexible'}`
+    }, { recipientUserId: assignedUserId });
 
     res.json({ success: true, task: createdTask });
   } catch (err) {
@@ -459,44 +715,61 @@ app.post('/api/tasks/assign', (req, res) => {
   }
 });
 
-// -------------------------------------------------------------
-// 3C. TASK STATUS UPDATE (Employee enters status after task is done -> 'done')
-// -------------------------------------------------------------
-app.post('/api/tasks/status', (req, res) => {
+// Task status update with role authorization & validation
+app.post('/api/tasks/status', requireAuth, (req, res) => {
   const { taskId, status, notes } = req.body;
   if (!taskId || !status) {
     return res.status(400).json({ error: 'taskId and status are required.' });
   }
 
-  try {
-    const now = Date.now();
-    const isDone = status === 'done' || status === 'completed';
-    const finalStatus = isDone ? 'done' : status;
+  const validStatuses = ['pending', 'active', 'review', 'verified', 'rejected', 'failed'];
+  const mappedStatus = (status === 'done' || status === 'completed') ? 'review' : status;
 
-    if (isDone) {
+  if (!validStatuses.includes(mappedStatus)) {
+    return res.status(400).json({ error: `Invalid status. Allowed values: ${validStatuses.join(', ')}` });
+  }
+
+  try {
+    const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+    if (!task) {
+      return res.status(404).json({ error: 'Task not found.' });
+    }
+
+    // Role check: Only Founders can mark tasks as 'verified' or 'rejected'
+    if ((mappedStatus === 'verified' || mappedStatus === 'rejected') && req.user.role !== 'founder') {
+      return res.status(403).json({ error: 'Only Founders can verify or reject deliverables.' });
+    }
+
+    // Employees can only update their own assigned tasks
+    if (req.user.role !== 'founder' && task.assigned_to !== req.user.id) {
+      return res.status(403).json({ error: 'You are not authorized to update tasks assigned to other employees.' });
+    }
+
+    const now = Date.now();
+    const isCompleted = mappedStatus === 'review' || mappedStatus === 'verified';
+
+    if (mappedStatus === 'verified') {
       db.prepare(`
         UPDATE tasks 
-        SET status = ?, completed_at = ?, payload_notes = COALESCE(?, payload_notes), ai_health_score = 98 
+        SET status = ?, completed_at = COALESCE(completed_at, ?), payload_notes = COALESCE(?, payload_notes), ai_health_score = 100 
         WHERE id = ?
-      `).run(finalStatus, now, notes || null, taskId);
+      `).run(mappedStatus, now, notes || null, taskId);
     } else {
       db.prepare(`
         UPDATE tasks 
-        SET status = ?, payload_notes = COALESCE(?, payload_notes) 
+        SET status = ?, completed_at = ?, payload_notes = COALESCE(?, payload_notes) 
         WHERE id = ?
-      `).run(finalStatus, notes || null, taskId);
+      `).run(mappedStatus, isCompleted ? now : null, notes || null, taskId);
     }
 
     const updatedTask = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
 
     broadcast('TASK_STATUS_UPDATED', {
       taskId,
-      status: finalStatus,
-      completed_at: isDone ? now : null,
+      status: mappedStatus,
+      completed_at: isCompleted ? now : null,
       task: updatedTask,
-      message: isDone 
-        ? `Task "${updatedTask?.title}" marked as Task Done.`
-        : `Task "${updatedTask?.title}" status updated to ${finalStatus}.`
+      message: `Task "${updatedTask?.title}" updated to status: ${mappedStatus.toUpperCase()}.`
     });
 
     res.json({ success: true, task: updatedTask });
@@ -506,19 +779,27 @@ app.post('/api/tasks/status', (req, res) => {
 });
 
 // -------------------------------------------------------------
-// 4. EMPLOYEE VIEW: Scoped Micro-Sprint Workspace
+// 5. EMPLOYEE WORKSPACE & SPRINT EXECUTION
 // -------------------------------------------------------------
-app.get('/api/workspace/:userId', (req, res) => {
-  const { userId } = req.params;
+function handleWorkspaceRequest(req, res, targetUserId) {
   try {
     autoCheckDeadlines();
-    const user = db.prepare('SELECT id, name, role, device_mac_address FROM users WHERE id = ?').get(userId);
-    if (!user || user.role !== 'employee') {
-      return res.status(403).json({ error: 'Access restricted to authorized Employee nodes.' });
+
+    // Authorization check: Employees can only view their own workspace; Founders can view any
+    if (req.user.role !== 'founder' && req.user.id !== targetUserId) {
+      return res.status(403).json({ error: 'Access restricted: You cannot access other employee workspaces.' });
     }
 
+    const user = db.prepare('SELECT id, name, role, email, skill_set, device_mac_address, is_active, last_seen_at FROM users WHERE id = ?').get(targetUserId);
+    if (!user || user.role !== 'employee') {
+      return res.status(404).json({ error: 'Authorized Employee node not found.' });
+    }
+
+    // Update last seen
+    db.prepare('UPDATE users SET last_seen_at = ? WHERE id = ?').run(Date.now(), targetUserId);
+
     // Get active or latest assigned task
-    let task = db.prepare(`
+    const task = db.prepare(`
       SELECT * FROM tasks 
       WHERE assigned_to = ? 
       ORDER BY CASE 
@@ -527,18 +808,18 @@ app.get('/api/workspace/:userId', (req, res) => {
         WHEN status = 'review' THEN 3 
         ELSE 4 END, 
       created_at DESC LIMIT 1
-    `).get(userId);
+    `).get(targetUserId);
 
     // Get all assigned tasks for employee table
     const tasks = db.prepare(`
       SELECT * FROM tasks 
       WHERE assigned_to = ? 
       ORDER BY created_at DESC
-    `).all(userId);
+    `).all(targetUserId);
 
     const latestLog = db.prepare(`
       SELECT * FROM telemetry_logs WHERE user_id = ? ORDER BY timestamp DESC LIMIT 1
-    `).get(userId);
+    `).get(targetUserId);
 
     res.json({
       user,
@@ -549,19 +830,35 @@ app.get('/api/workspace/:userId', (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+}
+
+app.get('/api/workspace/:userId', requireAuth, (req, res) => {
+  handleWorkspaceRequest(req, res, req.params.userId);
+});
+
+// Backward-compatible alias for Desktop Agent API compatibility
+app.get('/api/employee/dashboard', requireAuth, (req, res) => {
+  const targetId = req.query.userId || req.user.id;
+  handleWorkspaceRequest(req, res, targetId);
 });
 
 // Start 90-Minute Fixed Sprint & Screen Tracking (Employee Only)
-app.post('/api/workspace/start-sprint', (req, res) => {
+app.post('/api/workspace/start-sprint', requireAuth, (req, res) => {
   const { taskId, userId } = req.body;
+  const effectiveUserId = req.user.role === 'founder' ? (userId || req.user.id) : req.user.id;
+
   try {
-    const user = db.prepare('SELECT role, name FROM users WHERE id = ?').get(userId);
-    if (!user || user.role !== 'employee') {
-      return res.status(403).json({ error: 'Screen tracking & sprint timer is only available to Employee nodes.' });
+    const task = db.prepare('SELECT * FROM tasks WHERE id = ? AND assigned_to = ?').get(taskId, effectiveUserId);
+    if (!task) {
+      return res.status(404).json({ error: 'Assigned task not found or unauthorized.' });
+    }
+
+    if (task.session_terminated === 1) {
+      return res.status(400).json({ error: 'Cannot start sprint: Session was terminated by AI sentinel.' });
     }
 
     const now = Date.now();
-    const update = db.prepare(`
+    db.prepare(`
       UPDATE tasks 
       SET is_acknowledged = 1, 
           status = 'active', 
@@ -571,12 +868,7 @@ app.post('/api/workspace/start-sprint', (req, res) => {
           warning_count = 0,
           session_terminated = 0
       WHERE id = ? AND assigned_to = ?
-    `);
-    const result = update.run(now, taskId, userId);
-
-    if (result.changes === 0) {
-      return res.status(404).json({ error: 'Task not found or unauthorized.' });
-    }
+    `).run(now, taskId, effectiveUserId);
 
     // Log screen tracking initiation in telemetry
     const logId = 'log_track_' + Date.now();
@@ -584,17 +876,17 @@ app.post('/api/workspace/start-sprint', (req, res) => {
       INSERT INTO telemetry_logs (
         id, user_id, task_id, timestamp, active_window, keystroke_rate, hardware_spoof_flag, screenshot_url
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(logId, userId, taskId, now, 'Screen Tracking Engaged (Active Sprint)', 52.0, 0, null);
+    `).run(logId, effectiveUserId, taskId, now, 'Screen Tracking Engaged (Active Sprint)', 52.0, 0, null);
 
     const updatedTask = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
 
     broadcast('SPRINT_STARTED', {
       taskId,
-      userId,
-      employeeName: user.name,
+      userId: effectiveUserId,
+      employeeName: req.user.name,
       sprint_started_at: now,
       screen_tracking_active: 1,
-      message: `Employee ${user.name} initiated 90-Minute sprint. Screen tracking and AI agent monitoring active.`
+      message: `Employee ${req.user.name} initiated 90-Minute sprint. Screen tracking and AI agent monitoring active.`
     });
 
     res.json({ success: true, task: updatedTask });
@@ -604,28 +896,29 @@ app.post('/api/workspace/start-sprint', (req, res) => {
 });
 
 // Backward-compatible alias
-app.post('/api/workspace/acknowledge', (req, res) => {
-  const { taskId, userId } = req.body;
+app.post('/api/workspace/acknowledge', requireAuth, (req, res) => {
+  const { taskId } = req.body;
   const now = Date.now();
   db.prepare(`
     UPDATE tasks 
     SET is_acknowledged = 1, status = 'active', sprint_started_at = ?, screen_tracking_active = 1, warning_count = 0, session_terminated = 0
     WHERE id = ? AND assigned_to = ?
-  `).run(now, taskId, userId);
+  `).run(now, taskId, req.user.id);
   const updatedTask = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
-  broadcast('SPRINT_STARTED', { taskId, userId, sprint_started_at: now, screen_tracking_active: 1 });
+  broadcast('SPRINT_STARTED', { taskId, userId: req.user.id, sprint_started_at: now, screen_tracking_active: 1 });
   res.json({ success: true, task: updatedTask });
 });
 
 // AI Agent Activity Check & Warning / Session Termination Engine
-app.post('/api/workspace/ai-activity-check', (req, res) => {
-  const { taskId, userId, activeWindow, infractionReason, isUnusual } = req.body;
+app.post('/api/workspace/ai-activity-check', requireAuth, (req, res) => {
+  const { taskId, activeWindow, infractionReason, isUnusual } = req.body;
+  const userId = req.user.id;
+
   try {
     const task = db.prepare('SELECT * FROM tasks WHERE id = ? AND assigned_to = ?').get(taskId, userId);
-    const user = db.prepare('SELECT name, device_mac_address FROM users WHERE id = ?').get(userId);
 
     if (!task) {
-      return res.status(404).json({ error: 'Task not found.' });
+      return res.status(404).json({ error: 'Task not found or not assigned to you.' });
     }
 
     if (task.status !== 'active' || task.session_terminated === 1) {
@@ -658,7 +951,7 @@ app.post('/api/workspace/ai-activity-check', (req, res) => {
           timestamp: now
         };
 
-        broadcast('AI_AGENT_WARNING', warningPayload);
+        broadcast('AI_AGENT_WARNING', warningPayload, { recipientUserId: userId });
         return res.json({ success: true, warningCount: 1, terminated: false, warning: warningPayload });
       } else if (currentWarnings === 1) {
         // Warning 2
@@ -674,7 +967,7 @@ app.post('/api/workspace/ai-activity-check', (req, res) => {
           timestamp: now
         };
 
-        broadcast('AI_AGENT_WARNING', warningPayload);
+        broadcast('AI_AGENT_WARNING', warningPayload, { recipientUserId: userId });
         return res.json({ success: true, warningCount: 2, terminated: false, warning: warningPayload });
       } else {
         // Infraction 3 -> Terminate Session!
@@ -683,7 +976,7 @@ app.post('/api/workspace/ai-activity-check', (req, res) => {
           UPDATE tasks 
           SET session_terminated = 1, 
               screen_tracking_active = 0, 
-              status = 'review', 
+              status = 'rejected', 
               ai_health_score = 10,
               termination_reason = ? 
           WHERE id = ?
@@ -692,7 +985,7 @@ app.post('/api/workspace/ai-activity-check', (req, res) => {
         const terminationPayload = {
           userId,
           taskId,
-          employeeName: user?.name,
+          employeeName: req.user.name,
           reason: terminationReason,
           message: `SESSION TERMINATED BY AI AGENT: Employee failed to correct activity after 2 warnings. Session quarantined.`,
           timestamp: now
@@ -709,9 +1002,11 @@ app.post('/api/workspace/ai-activity-check', (req, res) => {
   }
 });
 
-// 90-minute Timer Reaches 00:00 -> Automatically turn off timer and tracking
-app.post('/api/workspace/timer-complete', (req, res) => {
-  const { taskId, userId } = req.body;
+// 90-minute Timer Reaches 00:00 -> Automatically turn off timer and tracking, advance to 'review'
+app.post('/api/workspace/timer-complete', requireAuth, (req, res) => {
+  const { taskId } = req.body;
+  const userId = req.user.id;
+
   try {
     db.prepare(`
       UPDATE tasks 
@@ -733,40 +1028,44 @@ app.post('/api/workspace/timer-complete', (req, res) => {
 });
 
 // Submit Proof of Work
-app.post('/api/workspace/submit-pow', (req, res) => {
-  const { taskId, userId, proofUrl, payloadText } = req.body;
+app.post('/api/workspace/submit-pow', requireAuth, (req, res) => {
+  const { taskId, proofUrl, payloadText } = req.body;
+  const userId = req.user.id;
+
   try {
     const task = db.prepare('SELECT * FROM tasks WHERE id = ? AND assigned_to = ?').get(taskId, userId);
     if (!task) {
-      return res.status(404).json({ error: 'Task not found.' });
+      return res.status(404).json({ error: 'Task not found or not assigned to you.' });
     }
 
     const proofData = JSON.stringify({
-      proofUrl: proofUrl || 'https://github.com/lexven-internal/pr/942',
-      payload: payloadText || 'Automated verification payload package',
+      proofUrl: proofUrl || '',
+      payload: payloadText || '',
       submittedAt: Date.now()
     });
 
     db.prepare(`
       UPDATE tasks 
-      SET status = 'review', proof_submission = ?, ai_health_score = 98 
+      SET status = 'review', 
+          proof_submission = ?, 
+          proof_url = ?,
+          payload_notes = ?,
+          ai_health_score = 98 
       WHERE id = ?
-    `).run(proofData, taskId);
+    `).run(proofData, proofUrl || null, payloadText || null, taskId);
 
     const updatedTask = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
 
-    // Fire simulated Webhook
     broadcast('POW_SUBMITTED', {
       taskId,
       userId,
       task: updatedTask,
-      webhookFired: updatedTask.proof_of_work_webhook,
-      message: `Proof-of-work received. Triggered automated validation webhook.`
+      message: `Proof-of-work submitted by ${req.user.name}. Awaiting Founder review.`
     });
 
     res.json({
       success: true,
-      message: 'Proof-of-work registered and automated webhook fired.',
+      message: 'Proof-of-work registered successfully. Delivered to Founder for verification.',
       task: updatedTask
     });
   } catch (err) {
@@ -774,9 +1073,11 @@ app.post('/api/workspace/submit-pow', (req, res) => {
   }
 });
 
-// ACTION 3: Lock UI when checkpoint timer hits 00:00 without submission
-app.post('/api/workspace/lockout', (req, res) => {
-  const { taskId, userId } = req.body;
+// Lock UI when checkpoint timer hits 00:00 without submission
+app.post('/api/workspace/lockout', requireAuth, (req, res) => {
+  const { taskId } = req.body;
+  const userId = req.user.id;
+
   try {
     db.prepare(`
       UPDATE tasks 
@@ -797,40 +1098,33 @@ app.post('/api/workspace/lockout', (req, res) => {
 });
 
 // -------------------------------------------------------------
-// 4B. 90-MINUTE SCREEN RECORDING UPLOAD & AI AGENT AUDIT ENGINE
-// Receives recordings from Android App or Standalone Desktop Agent
+// 6. SCREEN RECORDING UPLOAD & AI AGENT AUDIT ENGINE
 // -------------------------------------------------------------
-app.post('/api/recordings/upload', upload.single('video'), (req, res) => {
+app.post('/api/recordings/upload', requireAuth, uploadLimiter, upload.single('video'), (req, res) => {
   try {
-    const { userId, taskId, deviceType, durationSeconds, videoUrl: clientVideoUrl } = req.body;
     const file = req.file;
-
-    let filename;
-    if (file) {
-      filename = file.filename;
-    } else {
-      filename = `sprint_${userId || 'node'}_${Date.now()}.webm`;
-      const fallbackPath = path.join(recordingsDir, filename);
-      const mockVideoBuffer = Buffer.from([
-        0x00, 0x00, 0x00, 0x20, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d,
-        0x00, 0x00, 0x02, 0x00, 0x69, 0x73, 0x6f, 0x6d, 0x69, 0x73, 0x6f, 0x32,
-        0x61, 0x76, 0x63, 0x31, 0x6d, 0x70, 0x34, 0x31, 0x00, 0x00, 0x00, 0x08,
-        0x66, 0x72, 0x65, 0x65
-      ]);
-      try { fs.writeFileSync(fallbackPath, mockVideoBuffer); } catch (e) {}
+    if (!file) {
+      return res.status(400).json({ error: 'Video recording file is required. Missing upload payload.' });
     }
 
-    const user = db.prepare('SELECT name, device_mac_address FROM users WHERE id = ?').get(userId);
+    // Verify minimum file size (prevent empty 0-byte corrupt files)
+    if (file.size < 512) {
+      try { fs.unlinkSync(file.path); } catch (e) {}
+      return res.status(400).json({ error: 'Uploaded video file is empty or corrupted.' });
+    }
+
+    const { taskId, deviceType, durationSeconds } = req.body;
+    const userId = req.user.id;
+    const filename = file.filename;
+
     const task = taskId ? db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId) : null;
     const auditId = 'aud_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
-    const videoUrl = clientVideoUrl || `/recordings/${filename}`;
+    const videoUrl = `/recordings/${filename}`;
     const duration = parseInt(durationSeconds, 10) || 5400; // 90 mins (5400s) default
     const devType = deviceType || 'desktop';
 
-    // -----------------------------------------------------------
     // AI AGENT AUDIT ENGINE:
     // Analyzes session telemetry & recording artifacts for anomalies
-    // -----------------------------------------------------------
     const sessionLogs = db.prepare(`
       SELECT * FROM telemetry_logs 
       WHERE user_id = ? AND timestamp >= ? 
@@ -887,7 +1181,6 @@ app.post('/api/recordings/upload', upload.single('video'), (req, res) => {
       anomalyScoreDeduction += 10;
     }
 
-    // Calculate final AI audit metrics
     const baseHealth = task?.ai_health_score || 92;
     const finalHealthScore = Math.max(15, Math.min(99, baseHealth - anomalyScoreDeduction));
     const anomalyCount = anomalies.length;
@@ -924,7 +1217,7 @@ app.post('/api/recordings/upload', upload.single('video'), (req, res) => {
       auditId,
       taskId || null,
       userId,
-      user?.name || 'Employee',
+      req.user.name,
       devType,
       filename,
       videoUrl,
@@ -940,14 +1233,14 @@ app.post('/api/recordings/upload', upload.single('video'), (req, res) => {
 
     const auditRecord = db.prepare('SELECT * FROM sprint_audits WHERE id = ?').get(auditId);
 
-    // Broadcast AI audit to Founder Dashboard in real-time
+    // Broadcast AI audit in real-time
     broadcast('AUDIT_COMPLETED', {
       audit: {
         ...auditRecord,
         anomalies,
         focusBreakdown
       },
-      message: `AI Agent completed 90-min video audit for ${user?.name} (${devType.toUpperCase()}). Verdict: ${verdict}`
+      message: `AI Agent completed 90-min video audit for ${req.user.name} (${devType.toUpperCase()}). Verdict: ${verdict}`
     });
 
     res.json({
@@ -965,7 +1258,7 @@ app.post('/api/recordings/upload', upload.single('video'), (req, res) => {
 });
 
 // Fetch all sprint recordings & AI audits for Founder Dashboard
-app.get('/api/admin/sprint-audits', (req, res) => {
+app.get('/api/admin/sprint-audits', requireAuth, requireFounder, (req, res) => {
   try {
     const audits = db.prepare(`
       SELECT sa.*, u.device_mac_address, t.title as task_title
@@ -988,9 +1281,14 @@ app.get('/api/admin/sprint-audits', (req, res) => {
   }
 });
 
-// Fetch sprint recordings & AI audits for a specific employee
-app.get('/api/admin/sprint-audits/:userId', (req, res) => {
+// Fetch sprint recordings for a specific employee
+app.get('/api/admin/sprint-audits/:userId', requireAuth, (req, res) => {
   const { userId } = req.params;
+  // Employees can only fetch their own audits
+  if (req.user.role !== 'founder' && req.user.id !== userId) {
+    return res.status(403).json({ error: 'Access denied: You cannot view audit logs for other employees.' });
+  }
+
   try {
     const audits = db.prepare(`
       SELECT sa.*, u.device_mac_address, t.title as task_title
@@ -1015,14 +1313,20 @@ app.get('/api/admin/sprint-audits/:userId', (req, res) => {
 });
 
 // -------------------------------------------------------------
-// 5. ACTION 2: TELEMETRY STREAM & HARDWARE SPOOF SENTINEL
+// 7. TELEMETRY STREAM & HARDWARE SPOOF SENTINEL
 // -------------------------------------------------------------
-app.post('/api/telemetry/log', (req, res) => {
-  const { userId, taskId, activeWindow, keystrokeRate, hardwareSpoofFlag, screenshotUrl } = req.body;
+app.post('/api/telemetry/log', requireAuth, (req, res) => {
+  const { taskId, activeWindow, keystrokeRate, hardwareSpoofFlag, screenshotUrl } = req.body;
+  // Force user_id to verified session identity (prevents forging other employees' telemetry)
+  const userId = req.user.id;
+
   try {
-    const logId = 'log_' + Math.random().toString(36).substring(2, 9);
+    const logId = 'log_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7);
     const now = Date.now();
     const spoofVal = hardwareSpoofFlag ? 1 : 0;
+
+    // Update user last seen
+    db.prepare('UPDATE users SET last_seen_at = ? WHERE id = ?').run(now, userId);
 
     db.prepare(`
       INSERT INTO telemetry_logs (
@@ -1030,13 +1334,11 @@ app.post('/api/telemetry/log', (req, res) => {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(logId, userId, taskId || null, now, activeWindow || 'Terminal', keystrokeRate || 0, spoofVal, screenshotUrl || null);
 
-    const user = db.prepare('SELECT name, device_mac_address FROM users WHERE id = ?').get(userId);
-
     const logEntry = {
       id: logId,
       user_id: userId,
-      user_name: user?.name,
-      device_mac_address: user?.device_mac_address,
+      user_name: req.user.name,
+      device_mac_address: req.user.device_mac_address,
       task_id: taskId,
       timestamp: now,
       active_window: activeWindow,
@@ -1044,10 +1346,7 @@ app.post('/api/telemetry/log', (req, res) => {
       hardware_spoof_flag: spoofVal
     };
 
-    // ACTION 2 CRITICAL DIRECTIVE:
-    // If hardware_spoof_flag is true, instantly broadcast urgent alert to Founders
     if (spoofVal === 1) {
-      // Degrade task health score
       if (taskId) {
         db.prepare('UPDATE tasks SET ai_health_score = MAX(10, ai_health_score - 40) WHERE id = ?').run(taskId);
       }
@@ -1057,10 +1356,9 @@ app.post('/api/telemetry/log', (req, res) => {
         log: logEntry,
         timestamp: now,
         alertTitle: 'SECURITY SENTINEL: HARDWARE SPOOF DETECTED',
-        alertMessage: `Anomalous hardware signature or virtual input driver detected on ${user?.name} (${user?.device_mac_address}). Window: "${activeWindow}".`
-      });
+        alertMessage: `Anomalous hardware signature or virtual input driver detected on ${req.user.name} (${req.user.device_mac_address}). Window: "${activeWindow}".`
+      }, { founderOnly: true });
     } else {
-      // Standard telemetry broadcast
       broadcast('TELEMETRY_UPDATE', logEntry);
     }
 
@@ -1070,8 +1368,8 @@ app.post('/api/telemetry/log', (req, res) => {
   }
 });
 
-// Helper route to trigger spoof test easily for demo
-app.post('/api/telemetry/simulate-spoof', (req, res) => {
+// Spoof simulation for Founder security testing
+app.post('/api/telemetry/simulate-spoof', requireAuth, requireFounder, (req, res) => {
   const { userId, taskId } = req.body;
   const targetId = userId || 'usr_emp_02';
   const targetTask = taskId || 'tsk_002';
@@ -1107,37 +1405,13 @@ app.post('/api/telemetry/simulate-spoof', (req, res) => {
     alertMessage: `Simulated spoofing signal intercepted on ${user?.name} (${user?.device_mac_address})! Synthetic input entropy detected.`
   };
 
-  broadcast('HARDWARE_SPOOF_ALERT', alertPayload);
+  broadcast('HARDWARE_SPOOF_ALERT', alertPayload, { founderOnly: true });
   res.json({ success: true, alert: alertPayload });
 });
 
-// Network info endpoint for Android sets connection & PWA install
-app.get('/api/system/network-info', (req, res) => {
-  const nets = os.networkInterfaces();
-  const addresses = [];
-
-  for (const name of Object.keys(nets)) {
-    for (const net of nets[name]) {
-      if (net.family === 'IPv4' && !net.internal) {
-        addresses.push({
-          interface: name,
-          ip: net.address,
-          url: `http://${net.address}:${port}`
-        });
-      }
-    }
-  }
-
-  res.json({
-    port,
-    localUrl: `http://localhost:${port}`,
-    networkAddresses: addresses,
-    defaultNetworkUrl: addresses.length > 0 ? addresses[0].url : `http://localhost:${port}`,
-    pwaReady: true
-  });
-});
-
-// Serve frontend assets from dist (Unified Single Host) and public folder
+// -------------------------------------------------------------
+// 8. STATIC ASSETS & SPA ROUTING FALLBACK
+// -------------------------------------------------------------
 app.use(express.static(distPath));
 app.use(express.static(publicPath));
 
@@ -1152,19 +1426,28 @@ app.get('*', (req, res, next) => {
   res.sendFile(indexPath);
 });
 
+// Periodic background maintenance (purges sessions expired > 7 days)
+setInterval(() => {
+  try {
+    db.prepare('DELETE FROM sessions WHERE expires_at <= ?').run(Date.now());
+  } catch (e) {}
+}, 3600000); // Once per hour
+
 server.listen(port, '0.0.0.0', () => {
   console.log(`\n========================================================`);
-  console.log(`[Lexven Inovex Web Platform] Online & Ready!`);
+  console.log(`[Lexven Inovex Web Platform] Online & Secure!`);
   console.log(`> Desktop Browser: http://localhost:${port}`);
   
   const nets = os.networkInterfaces();
   for (const name of Object.keys(nets)) {
     for (const net of nets[name]) {
       if (net.family === 'IPv4' && !net.internal) {
-        console.log(`> Android Sets:    http://${net.address}:${port} (Open to install & run)`);
+        console.log(`> Android Sets:    http://${net.address}:${port}`);
       }
     }
   }
-  console.log(`[WebSocket Server] Sub-second telemetry stream listening`);
+  console.log(`[WebSocket Server] Sub-second telemetry stream listening with RBAC`);
   console.log(`========================================================\n`);
 });
+
+export default app;

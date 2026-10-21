@@ -3,11 +3,16 @@
   "version": "1.0.0",
   "description": "High-tech telemetry-driven employee dashboard with strict RBAC and autonomous task dispatching",
   "type": "module",
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "scripts": {
     "server": "node server/server.js",
     "client": "vite",
     "dev": "concurrently \"node server/server.js\" \"vite\"",
     "build": "vite build && npx cap copy android",
+    "build:web": "vite build",
+    "test": "node server/test-auth-and-api.js",
     "start": "node server/server.js"
   },
   "dependencies": {

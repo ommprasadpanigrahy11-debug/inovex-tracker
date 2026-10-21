@@ -159,30 +159,26 @@ export function SidebarNav({
                 {isFounder ? 'Founder Node' : 'Engineer Node'}
               </span>
 
-              {/* Fast User Switcher */}
-              <div className="sidebar-role-select-wrap">
-                <select 
-                  className="sidebar-role-select"
-                  value={currentUser?.id || ''}
-                  onChange={handleSelectUser}
-                  aria-label="Switch User Identity"
-                >
-                  <optgroup label="Founders">
-                    {users.filter(u => u.role === 'founder').map(u => (
-                      <option key={u.id} value={u.id}>
-                        {u.name} (Founder)
-                      </option>
-                    ))}
-                  </optgroup>
-                  <optgroup label="Employees">
-                    {users.filter(u => u.role === 'employee').map(u => (
-                      <option key={u.id} value={u.id}>
-                        {u.name} (Employee)
-                      </option>
-                    ))}
-                  </optgroup>
-                </select>
-              </div>
+              <button
+                type="button"
+                className="sidebar-switch-node-btn"
+                onClick={onLogout}
+                title="Switch to another user account (requires credentials)"
+                style={{
+                  background: 'transparent',
+                  border: '1px solid var(--line)',
+                  borderRadius: '6px',
+                  padding: '3px 8px',
+                  fontSize: '11px',
+                  color: 'var(--muted)',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px'
+                }}
+              >
+                <span>Switch Node</span>
+              </button>
             </div>
           </div>
 

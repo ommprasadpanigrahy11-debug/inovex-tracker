@@ -19,9 +19,8 @@ import {
 import { registerUser, loginUser, generateMacAddress } from '../lib/dataService';
 
 export function LoginGateway({ users = [], onLogin }) {
-  // If no users exist in the system, default to register mode
-  const [authMode, setAuthMode] = useState(users.length === 0 ? 'register' : 'signin'); // 'signin' | 'register'
-  const [selectedRole, setSelectedRole] = useState('founder'); // 'founder' | 'employee'
+  const [authMode, setAuthMode] = useState(users.length === 0 ? 'register' : 'signin');
+  const [selectedRole, setSelectedRole] = useState(users.length === 0 ? 'founder' : 'employee');
   
   // Sign-in state
   const [email, setEmail] = useState('');
@@ -33,16 +32,16 @@ export function LoginGateway({ users = [], onLogin }) {
   const [regSkillSet, setRegSkillSet] = useState('');
   const [regMac, setRegMac] = useState(generateMacAddress());
   const [regPassword, setRegPassword] = useState('');
+  const [regBootstrapKey, setRegBootstrapKey] = useState('');
 
   const [isLoading, setIsLoading] = useState(false);
   const [authStep, setAuthStep] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
 
-  // Filter nodes for the quick access section based on role tab
   const roleUsers = users.filter(u => u.role === selectedRole);
 
-  // STRICT AUTHORIZED EMAIL & PASSWORD AUTHENTICATION
+  // AUTHENTICATE NODE
   const handleSignInSubmit = async (e) => {
     if (e) e.preventDefault();
     setErrorMsg('');
@@ -56,12 +55,12 @@ export function LoginGateway({ users = [], onLogin }) {
       return;
     }
     if (!trimmedPassword) {
-      setErrorMsg('Please enter your security password or master passcode.');
+      setErrorMsg('Please enter your account password.');
       return;
     }
 
     setIsLoading(true);
-    setAuthStep('Validating credentials against authorized security registry...');
+    setAuthStep('Verifying credentials against security registry...');
 
     try {
       const authRes = await loginUser({ email: trimmedEmail, password: trimmedPassword });
@@ -73,30 +72,30 @@ export function LoginGateway({ users = [], onLogin }) {
         return;
       }
 
-      setAuthStep(`Binding authorized node enclave: ${authRes.user.name}...`);
+      setAuthStep(`Binding authorized node: ${authRes.user.name}...`);
       setTimeout(() => {
         setIsLoading(false);
         setAuthStep('');
         onLogin(authRes.user);
-      }, 350);
+      }, 300);
 
     } catch (err) {
       setIsLoading(false);
       setAuthStep('');
-      setErrorMsg(err?.message || 'Authentication server unreachable. Please retry.');
+      setErrorMsg(err?.message || 'Authentication server unreachable. Please verify server status.');
     }
   };
 
   const handleSelectQuickNode = (user) => {
     setEmail(user.email || '');
-    setPassword(user.role === 'founder' ? '9901' : '1042');
+    setPassword('');
     setErrorMsg('');
-    setSuccessMsg(`Prefilled authorized credentials for ${user.name}`);
+    setSuccessMsg(`Selected node: ${user.name}. Please enter your password to sign in.`);
     const passInput = document.getElementById('login-password-input');
     if (passInput) passInput.focus();
   };
 
-  // REGISTER NEW AUTHORIZED NODE
+  // REGISTER NEW NODE
   const handleRegisterSubmit = async (e) => {
     e.preventDefault();
     setErrorMsg('');
@@ -107,26 +106,31 @@ export function LoginGateway({ users = [], onLogin }) {
     const skillSet = regSkillSet.trim();
     const pass = regPassword.trim();
     const mac = regMac.trim() || generateMacAddress();
+    const bootstrap = regBootstrapKey.trim();
 
     if (!name) {
       setErrorMsg('Please enter your full name.');
       return;
     }
     if (!cleanEmail || !cleanEmail.includes('@')) {
-      setErrorMsg('Please enter a valid authorized node email address.');
+      setErrorMsg('Please enter a valid email address.');
       return;
     }
     if (!skillSet) {
-      setErrorMsg('Please enter your skill set (displayed in brackets on Orchestration Grid).');
+      setErrorMsg('Please enter your skill set or specialization.');
       return;
     }
     if (!pass) {
-      setErrorMsg('Please create an authorized password for this node.');
+      setErrorMsg('Please create a secure password for this node.');
+      return;
+    }
+    if (pass.length < 4) {
+      setErrorMsg('Password must be at least 4 characters long.');
       return;
     }
 
     setIsLoading(true);
-    setAuthStep('Creating authorized node and establishing enclave security...');
+    setAuthStep('Registering node in verified security registry...');
 
     try {
       const res = await registerUser({
@@ -135,16 +139,17 @@ export function LoginGateway({ users = [], onLogin }) {
         password: pass,
         role: selectedRole,
         skill_set: skillSet,
-        device_mac_address: mac
+        device_mac_address: mac,
+        bootstrapKey: bootstrap || null
       });
 
       if (res && res.success && res.user) {
-        setAuthStep(`Enclave registered for ${res.user.name} (${res.user.skill_set}). Launching workspace...`);
+        setAuthStep(`Node registered for ${res.user.name}. Initializing workspace...`);
         setTimeout(() => {
           setIsLoading(false);
           setAuthStep('');
           onLogin(res.user);
-        }, 400);
+        }, 350);
       } else {
         throw new Error('Registration could not be completed.');
       }
@@ -152,7 +157,6 @@ export function LoginGateway({ users = [], onLogin }) {
       setIsLoading(false);
       setAuthStep('');
       setErrorMsg(err?.message || 'Could not register node. Please retry.');
-      console.error('Node registration error', err);
     }
   };
 
@@ -169,7 +173,7 @@ export function LoginGateway({ users = [], onLogin }) {
             Operations Sentinel v2.0
           </span>
           <p className="login-subtitle">
-            Authorized Email Access Gateway & Zero-Latency Operations Enclave
+            Enterprise Operations Sentinel & Zero-Latency Telemetry Enclave
           </p>
         </div>
 
@@ -208,12 +212,12 @@ export function LoginGateway({ users = [], onLogin }) {
             </button>
           </div>
 
-          {/* Empty Database Initial Setup Prompt */}
+          {/* Initial Setup Banner if Zero Users */}
           {users.length === 0 && authMode === 'register' && (
             <div style={{ background: 'var(--accent-tint-2)', border: '1px solid rgba(95, 115, 72, 0.3)', borderRadius: '8px', padding: '10px 14px', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '10px' }}>
               <Shield size={16} style={{ color: 'var(--accent-strong)', flexShrink: 0 }} />
               <div style={{ fontSize: '12px', color: 'var(--ink)' }}>
-                <strong>Initial Setup:</strong> No node records exist. Register your initial Founder or Engineer node below to initialize the system.
+                <strong>System Initial Setup:</strong> No accounts exist yet. Register your initial Founder account below to initialize the operational enclave.
               </div>
             </div>
           )}
@@ -231,7 +235,7 @@ export function LoginGateway({ users = [], onLogin }) {
               id="role-tab-founder"
             >
               <Shield size={14} />
-              <span>Founder / Executive</span>
+              <span>Executive Founder</span>
             </button>
             <button
               type="button"
@@ -244,7 +248,7 @@ export function LoginGateway({ users = [], onLogin }) {
               id="role-tab-employee"
             >
               <Laptop size={14} />
-              <span>Engineering Node</span>
+              <span>Engineering Operator</span>
             </button>
           </div>
 
@@ -252,13 +256,10 @@ export function LoginGateway({ users = [], onLogin }) {
           {authMode === 'signin' ? (
             <form onSubmit={handleSignInSubmit} className="login-form">
               <div className="login-input-group">
-                <label className="login-label">
+                <label className="login-label" htmlFor="login-email-input">
                   <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
                     <Mail size={12} style={{ color: 'var(--accent)' }} />
-                    <span>Authorized Node Email</span>
-                  </span>
-                  <span className="mono" style={{ fontSize: '10px', color: 'var(--muted)' }}>
-                    {selectedRole === 'founder' ? 'sarah.vance@lexven.com' : 'alex.mercer@lexven.com'}
+                    <span>Authorized Email</span>
                   </span>
                 </label>
                 <input
@@ -266,22 +267,20 @@ export function LoginGateway({ users = [], onLogin }) {
                   id="login-email-input"
                   className="dispatch-textarea"
                   style={{ height: '42px', padding: '10px 14px', resize: 'none' }}
-                  placeholder={selectedRole === 'founder' ? 'Enter founder email (e.g. sarah.vance@lexven.com)...' : 'Enter employee email (e.g. alex.mercer@lexven.com)...'}
+                  placeholder={selectedRole === 'founder' ? 'sarah.vance@lexven.com' : 'alex.mercer@lexven.com'}
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   disabled={isLoading}
                   autoComplete="email"
+                  required
                 />
               </div>
 
               <div className="login-input-group">
-                <label className="login-label">
+                <label className="login-label" htmlFor="login-password-input">
                   <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
                     <Lock size={12} style={{ color: 'var(--accent)' }} />
-                    <span>Security Password / Master Passcode</span>
-                  </span>
-                  <span className="mono" style={{ fontSize: '10px', color: 'var(--muted)' }}>
-                    {selectedRole === 'founder' ? 'Default: 9901' : 'Default: 1042'}
+                    <span>Account Password</span>
                   </span>
                 </label>
                 <input
@@ -289,11 +288,12 @@ export function LoginGateway({ users = [], onLogin }) {
                   id="login-password-input"
                   className="dispatch-textarea"
                   style={{ height: '42px', padding: '10px 14px', resize: 'none' }}
-                  placeholder={selectedRole === 'founder' ? 'Enter password or founder master key (9901)...' : 'Enter password or employee master key (1042)...'}
+                  placeholder="Enter your security password..."
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   disabled={isLoading}
                   autoComplete="current-password"
+                  required
                 />
               </div>
 
@@ -329,7 +329,7 @@ export function LoginGateway({ users = [], onLogin }) {
                 ) : (
                   <>
                     <Key size={16} />
-                    <span>Sign In to {selectedRole === 'founder' ? 'Founder Dashboard' : 'Employee Workspace'}</span>
+                    <span>Authenticate to {selectedRole === 'founder' ? 'Founder Dashboard' : 'Employee Workspace'}</span>
                     <ArrowRight size={15} />
                   </>
                 )}
@@ -339,7 +339,7 @@ export function LoginGateway({ users = [], onLogin }) {
             /* REGISTER NEW NODE FORM */
             <form onSubmit={handleRegisterSubmit} className="login-form">
               <div className="login-input-group">
-                <label className="login-label">
+                <label className="login-label" htmlFor="reg-name-input">
                   <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
                     <User size={12} style={{ color: 'var(--accent)' }} />
                     <span>Full Name</span>
@@ -362,13 +362,10 @@ export function LoginGateway({ users = [], onLogin }) {
               </div>
 
               <div className="login-input-group">
-                <label className="login-label">
+                <label className="login-label" htmlFor="reg-email-input">
                   <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
                     <Mail size={12} style={{ color: 'var(--accent)' }} />
-                    <span>Node Email Address</span>
-                  </span>
-                  <span className="mono" style={{ fontSize: '10px', color: 'var(--muted)' }}>
-                    Unique Workstation Login
+                    <span>Email Address</span>
                   </span>
                 </label>
                 <input
@@ -381,17 +378,18 @@ export function LoginGateway({ users = [], onLogin }) {
                   value={regEmail}
                   onChange={(e) => setRegEmail(e.target.value)}
                   disabled={isLoading}
+                  autoComplete="email"
                 />
               </div>
 
               <div className="login-input-group">
-                <label className="login-label">
+                <label className="login-label" htmlFor="reg-skillset-input">
                   <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
                     <Sparkles size={12} style={{ color: 'var(--accent)' }} />
-                    <span>Skill Set / Specialization (Required)</span>
+                    <span>Skill Set / Specialization</span>
                   </span>
                   <span className="mono" style={{ fontSize: '10px', color: 'var(--accent-strong)' }}>
-                    Displayed in Brackets on Grid
+                    Displayed on Grid
                   </span>
                 </label>
                 <input
@@ -405,19 +403,13 @@ export function LoginGateway({ users = [], onLogin }) {
                   onChange={(e) => setRegSkillSet(e.target.value)}
                   disabled={isLoading}
                 />
-                <div style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '3px' }}>
-                  This skill will appear in brackets on the Orchestration Grid: <em>{regName || 'Operator'} ({regSkillSet || 'Skill Set'})</em>
-                </div>
               </div>
 
               <div className="login-input-group">
-                <label className="login-label">
+                <label className="login-label" htmlFor="reg-password-input">
                   <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
                     <Lock size={12} style={{ color: 'var(--accent)' }} />
                     <span>Security Password</span>
-                  </span>
-                  <span className="mono" style={{ fontSize: '10px', color: 'var(--muted)' }}>
-                    Workstation Access Key
                   </span>
                 </label>
                 <input
@@ -426,15 +418,44 @@ export function LoginGateway({ users = [], onLogin }) {
                   required
                   className="dispatch-textarea"
                   style={{ height: '42px', padding: '10px 14px', resize: 'none' }}
-                  placeholder="Create secure account password..."
+                  placeholder="Create secure account password (min. 4 chars)..."
                   value={regPassword}
                   onChange={(e) => setRegPassword(e.target.value)}
                   disabled={isLoading}
+                  autoComplete="new-password"
                 />
               </div>
 
+              {/* Founder Bootstrap Key (Required for Founder role if system already has accounts) */}
+              {selectedRole === 'founder' && users.length > 0 && (
+                <div className="login-input-group">
+                  <label className="login-label" htmlFor="reg-bootstrap-input">
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                      <Key size={12} style={{ color: 'var(--status-amber)' }} />
+                      <span>Founder Authorization Key</span>
+                    </span>
+                    <span className="mono" style={{ fontSize: '10px', color: 'var(--muted)' }}>
+                      Restricted Access
+                    </span>
+                  </label>
+                  <input
+                    type="password"
+                    id="reg-bootstrap-input"
+                    className="dispatch-textarea"
+                    style={{ height: '42px', padding: '10px 14px', resize: 'none' }}
+                    placeholder="Enter system founder bootstrap token..."
+                    value={regBootstrapKey}
+                    onChange={(e) => setRegBootstrapKey(e.target.value)}
+                    disabled={isLoading}
+                  />
+                  <div style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '3px' }}>
+                    Executive Founder creation is guarded. Enter the environment bootstrap key or have an existing Founder create your account.
+                  </div>
+                </div>
+              )}
+
               <div className="login-input-group">
-                <label className="login-label">
+                <label className="login-label" htmlFor="reg-mac-input">
                   <span>Hardware MAC Signature</span>
                   <span className="mono" style={{ fontSize: '10px', color: 'var(--muted)' }}>
                     Device Binding
@@ -442,6 +463,7 @@ export function LoginGateway({ users = [], onLogin }) {
                 </label>
                 <input
                   type="text"
+                  id="reg-mac-input"
                   className="dispatch-textarea mono"
                   style={{ height: '38px', padding: '8px 12px', resize: 'none', fontSize: '12px' }}
                   value={regMac}
@@ -474,7 +496,7 @@ export function LoginGateway({ users = [], onLogin }) {
                 ) : (
                   <>
                     <UserPlus size={15} />
-                    <span>Register & Sign In to {selectedRole === 'founder' ? 'Founder Grid' : 'Workspace'}</span>
+                    <span>Register Node & Sign In</span>
                     <ArrowRight size={15} />
                   </>
                 )}
@@ -482,11 +504,11 @@ export function LoginGateway({ users = [], onLogin }) {
             </form>
           )}
 
-          {/* Quick Access Pre-Authorized Node Chips */}
+          {/* Quick Access Pre-Authorized Node Directory */}
           {users.length > 0 && authMode === 'signin' && (
             <div className="login-quick-section">
               <div className="section-kicker" style={{ marginBottom: '10px', fontSize: '10px', padding: '3px 10px' }}>
-                Quick Access Authorized Nodes ({selectedRole === 'founder' ? 'Founders' : 'Engineers'})
+                Quick Node Directory ({selectedRole === 'founder' ? 'Founders' : 'Engineers'})
               </div>
               
               {roleUsers.length === 0 ? (
@@ -503,6 +525,7 @@ export function LoginGateway({ users = [], onLogin }) {
                       onClick={() => handleSelectQuickNode(user)}
                       disabled={isLoading}
                       title={`Select ${user.name} (${user.email})`}
+                      aria-label={`Select ${user.name}`}
                     >
                       <div className="quick-node-avatar">
                         {user.name.split(' ').map(n => n[0]).join('')}
@@ -527,7 +550,7 @@ export function LoginGateway({ users = [], onLogin }) {
           <div className="login-footer-security">
             <Cpu size={12} style={{ color: 'var(--accent)' }} />
             <span className="mono">
-              Strict Authorized Email & Passcode Verification • Zero-Trust Hardware Enclave
+              Strict Salted Scrypt Authentication • Server-Validated Tokens • Zero-Trust Enclave
             </span>
           </div>
 

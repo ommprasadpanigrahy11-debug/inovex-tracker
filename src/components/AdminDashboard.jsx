@@ -271,7 +271,7 @@ export function AdminDashboard({ currentUser, lastWsEvent, activeTab, onInspectE
           <div className="specimen-label">Total Nodes</div>
           <div className="specimen-num">{gridUsers.length.toString().padStart(2, '0')}</div>
           <div className="specimen-sub">
-            {gridUsers.filter(u => u.role === 'founder').length} Founders, {gridUsers.filter(u => u.role === 'employee').length} Engineers
+            {gridUsers.filter(u => u.role === 'founder').length} Founders, {gridUsers.filter(u => u.role === 'employee' && u.is_online).length} Active ({gridUsers.filter(u => u.role === 'employee').length} Total)
           </div>
         </div>
         <div className="specimen-box">
@@ -321,8 +321,11 @@ export function AdminDashboard({ currentUser, lastWsEvent, activeTab, onInspectE
             gridUsers.map(user => {
               const isFounder = user.role === 'founder';
               const isSpoofed = user.telemetry?.hardware_spoof_flag === 1;
+              const isOnline = user.is_online === true;
               const healthScore = user.active_task?.ai_health_score ?? 85;
               const healthClass = getHealthClass(healthScore);
+              const badgeClass = isFounder ? 'founder' : isSpoofed ? 'anomaly' : isOnline ? 'active' : 'waiting';
+              const statusText = isFounder ? 'Founder' : isSpoofed ? 'Anomaly Detected' : isOnline ? 'Active • Online' : 'Standby • Offline';
 
               return (
                 <div 
@@ -350,9 +353,9 @@ export function AdminDashboard({ currentUser, lastWsEvent, activeTab, onInspectE
                       {user.name} {user.skill_set ? `(${user.skill_set})` : ''}
                     </span>
                   </div>
-                  <span className={`badge ${isFounder ? 'founder' : isSpoofed ? 'anomaly' : 'active'}`}>
-                    <span className="badge-dot"></span>
-                    {isFounder ? 'Founder' : isSpoofed ? 'Anomaly Detected' : 'Operational'}
+                  <span className={`badge ${badgeClass}`}>
+                    <span className="badge-dot" style={{ background: isSpoofed ? 'var(--status-red)' : (isOnline || isFounder) ? 'var(--status-green)' : 'var(--muted)' }}></span>
+                    {statusText}
                   </span>
                 </div>
 

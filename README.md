@@ -14,7 +14,7 @@ A telemetry-driven employee operations dashboard and task dispatching platform b
 
 ### Prerequisites
 
-- Node.js (v18 or higher recommended)
+- Node.js (v22.5.0 or higher required for native `node:sqlite` `DatabaseSync`)
 - npm
 
 ### Installation
@@ -26,19 +26,23 @@ cd inovex-tracker
 
 # Install dependencies
 npm install
+
+# Run automated security and API regression tests
+npm test
 ```
 
-### Running on Desktop (Any Browser)
+### Running Locally
 
 ```bash
-# Build web app and sync to Android
-npm run build
+# Start backend server and Vite frontend concurrently
+npm run dev
 
-# Start the unified web server
+# Or build and run production server
+npm run build:web
 npm start
 ```
 
-1. Open your desktop browser at **http://localhost:5000/** (Works in Chrome, Edge, Safari, Firefox).
+1. Open your browser at **http://localhost:5173/** (dev) or **http://localhost:3001/** (production server).
 2. The entire platform (Founder Dashboard, Employee Workspace, 90-minute sprints, screen sentinel, and live telemetry) is ready immediately.
 
 ---

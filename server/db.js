@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import crypto from 'node:crypto';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -119,16 +120,73 @@ try { db.exec('ALTER TABLE users ADD COLUMN biometric_passkey_id TEXT;'); } catc
 try { db.exec('ALTER TABLE users ADD COLUMN biometric_enrolled INTEGER DEFAULT 1;'); } catch (e) {}
 try { db.exec('ALTER TABLE users ADD COLUMN email TEXT;'); } catch (e) {}
 try { db.exec('ALTER TABLE users ADD COLUMN password TEXT;'); } catch (e) {}
+try { db.exec('ALTER TABLE users ADD COLUMN password_hash TEXT;'); } catch (e) {}
+try { db.exec('ALTER TABLE users ADD COLUMN password_salt TEXT;'); } catch (e) {}
 try { db.exec('ALTER TABLE users ADD COLUMN skill_set TEXT;'); } catch (e) {}
+try { db.exec('ALTER TABLE users ADD COLUMN last_seen_at INTEGER;'); } catch (e) {}
+try { db.exec('ALTER TABLE users ADD COLUMN created_at INTEGER DEFAULT 0;'); } catch (e) {}
 
-// Ensure default users have passwords, emails, and skill sets
+// Sessions table for secure token authentication and revocation
+db.exec(`
+  CREATE TABLE IF NOT EXISTS sessions (
+    token TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    ip_address TEXT,
+    user_agent TEXT,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token);
+  CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+`);
+
+// Helper to hash passwords using node:crypto scrypt
+function hashPasswordInternal(password, salt) {
+  return crypto.scryptSync(String(password).normalize(), salt, 64).toString('hex');
+}
+
+// Ensure default users have passwords, emails, and skill sets with secure hashes
 try {
-  db.prepare("UPDATE users SET name = 'Sarah Vance', password = COALESCE(password, '9901'), email = COALESCE(email, 'sarah.vance@lexven.com'), skill_set = COALESCE(skill_set, 'CEO / Founder') WHERE id = 'usr_fnd_01'").run();
-  db.prepare("UPDATE users SET name = 'David Chen', password = COALESCE(password, '9901'), email = COALESCE(email, 'david.chen@lexven.com'), skill_set = COALESCE(skill_set, 'CTO / Founder') WHERE id = 'usr_fnd_02'").run();
-  db.prepare("UPDATE users SET name = 'Alex Mercer', password = COALESCE(password, '1042'), email = COALESCE(email, 'alex.mercer@lexven.com'), skill_set = COALESCE(skill_set, 'Agentic Eng') WHERE id = 'usr_emp_01'").run();
-  db.prepare("UPDATE users SET name = 'Elena Rostova', password = COALESCE(password, '1042'), email = COALESCE(email, 'elena.rostova@lexven.com'), skill_set = COALESCE(skill_set, 'Pipeline Eng') WHERE id = 'usr_emp_02'").run();
-  db.prepare("UPDATE users SET name = 'Marcus Brody', password = COALESCE(password, '1042'), email = COALESCE(email, 'marcus.brody@lexven.com'), skill_set = COALESCE(skill_set, 'Telemetry Systems') WHERE id = 'usr_emp_03'").run();
-  db.prepare("UPDATE users SET name = 'Sophia Lindqvist', password = COALESCE(password, '1042'), email = COALESCE(email, 'sophia.lindqvist@lexven.com'), skill_set = COALESCE(skill_set, 'Model Ops') WHERE id = 'usr_emp_04'").run();
+  const usersToUpdate = [
+    { id: 'usr_fnd_01', name: 'Sarah Vance', pass: '9901', email: 'sarah.vance@lexven.com', skill: 'CEO / Founder' },
+    { id: 'usr_fnd_02', name: 'David Chen', pass: '9901', email: 'david.chen@lexven.com', skill: 'CTO / Founder' },
+    { id: 'usr_emp_01', name: 'Alex Mercer', pass: '1042', email: 'alex.mercer@lexven.com', skill: 'Agentic Eng' },
+    { id: 'usr_emp_02', name: 'Elena Rostova', pass: '1042', email: 'elena.rostova@lexven.com', skill: 'Pipeline Eng' },
+    { id: 'usr_emp_03', name: 'Marcus Brody', pass: '1042', email: 'marcus.brody@lexven.com', skill: 'Telemetry Systems' },
+    { id: 'usr_emp_04', name: 'Sophia Lindqvist', pass: '1042', email: 'sophia.lindqvist@lexven.com', skill: 'Model Ops' }
+  ];
+
+  for (const u of usersToUpdate) {
+    const existing = db.prepare('SELECT id, password, password_hash, password_salt FROM users WHERE id = ?').get(u.id);
+    if (existing) {
+      if (!existing.password_hash) {
+        const salt = crypto.randomBytes(16).toString('hex');
+        const plainToHash = existing.password || u.pass;
+        const hash = hashPasswordInternal(plainToHash, salt);
+        db.prepare(`
+          UPDATE users 
+          SET name = ?, password_hash = ?, password_salt = ?, password = NULL, email = COALESCE(email, ?), skill_set = COALESCE(skill_set, ?)
+          WHERE id = ?
+        `).run(u.name, hash, salt, u.email, u.skill, u.id);
+      }
+    }
+  }
+
+  // Also migrate any user who has a plaintext password but no password_hash
+  const allUsersWithPlaintext = db.prepare("SELECT id, password FROM users WHERE password IS NOT NULL AND (password_hash IS NULL OR password_hash = '')").all();
+  for (const u of allUsersWithPlaintext) {
+    const salt = crypto.randomBytes(16).toString('hex');
+    const hash = hashPasswordInternal(u.password, salt);
+    db.prepare('UPDATE users SET password_hash = ?, password_salt = ?, password = NULL WHERE id = ?').run(hash, salt, u.id);
+  }
+} catch (e) {
+  console.warn('Password migration note:', e?.message || e);
+}
+
+// Canonicalize legacy task statuses ('done' or 'completed' -> 'review')
+try {
+  db.prepare("UPDATE tasks SET status = 'review' WHERE status IN ('done', 'completed')").run();
 } catch (e) {}
 
 // 4. Sprint Audits Table (Stores 90-Min Recordings & AI Agent Anomaly Audits)

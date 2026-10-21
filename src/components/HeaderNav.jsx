@@ -67,32 +67,10 @@ export function HeaderNav({ currentUser, users, onSwitchUser, wsConnected, onSim
             </span>
           </div>
 
-          {/* Account Switcher Dropdown */}
           <div className="switcher-pill">
             <span className="mono" style={{ fontSize: '10px', color: 'var(--muted-2)', textTransform: 'uppercase' }}>
-              Role:
+              Enclave: Verified Node
             </span>
-            <select 
-              className="switcher-select"
-              value={currentUser?.id || ''}
-              onChange={(e) => onSwitchUser(e.target.value)}
-              aria-label="Switch User Identity"
-            >
-              <optgroup label="Founders (Cap: 2)">
-                {users.filter(u => u.role === 'founder').map(u => (
-                  <option key={u.id} value={u.id}>
-                    {u.name} (Founder)
-                  </option>
-                ))}
-              </optgroup>
-              <optgroup label="Employees (Cap: 4)">
-                {users.filter(u => u.role === 'employee').map(u => (
-                  <option key={u.id} value={u.id}>
-                    {u.name} (Employee)
-                  </option>
-                ))}
-              </optgroup>
-            </select>
           </div>
         </div>
       </div>

@@ -6,7 +6,7 @@ import { FounderEmployeeView } from './components/FounderEmployeeView';
 import { InstallAppModal } from './components/InstallAppModal';
 import { LoginGateway } from './components/LoginGateway';
 import { AlertTriangle, X, ShieldAlert } from 'lucide-react';
-import { fetchUsers, simulateHardwareSpoof } from './lib/dataService';
+import { fetchUsers, simulateHardwareSpoof, verifyStoredSession, logoutUser, getAuthToken } from './lib/dataService';
 import { isSupabaseConfigured, initRealtimeChannel } from './lib/supabase';
 
 export function App() {
@@ -63,25 +63,26 @@ export function App() {
     setInstallModalOpen(false);
   };
 
-  // Fetch users (from Supabase Cloud or local fallback) & restore authenticated session
+  // Restore authenticated session with server verification
   useEffect(() => {
-    fetchUsers().then(data => {
-      setUsers(data);
-      const savedUserJson = localStorage.getItem('inovex_auth_user');
-      if (savedUserJson) {
-        try {
-          const parsed = JSON.parse(savedUserJson);
-          const found = data.find(u => u.id === parsed.id || u.email === parsed.email);
-          if (found) {
-            setCurrentUser(found);
-            setActiveTab(found.role === 'founder' ? 'dashboard' : 'workspace');
-          }
-        } catch (e) {
-          console.warn('Could not parse stored session', e);
+    async function initSession() {
+      try {
+        const verifiedUser = await verifyStoredSession();
+        if (verifiedUser) {
+          setCurrentUser(verifiedUser);
+          setActiveTab(verifiedUser.role === 'founder' ? 'dashboard' : 'workspace');
+        } else {
+          setCurrentUser(null);
         }
+        const data = await fetchUsers();
+        setUsers(data);
+      } catch (e) {
+        console.warn('Session verification fallback', e);
+      } finally {
+        setIsInitializing(false);
       }
-      setIsInitializing(false);
-    });
+    }
+    initSession();
   }, []);
 
   // Handle Login Success
@@ -93,18 +94,13 @@ export function App() {
       }
       return prev;
     });
-    try {
-      localStorage.setItem('inovex_auth_user', JSON.stringify(user));
-    } catch (e) {}
     setActiveTab(user.role === 'founder' ? 'dashboard' : 'workspace');
   };
 
   // Handle Logout / Disconnect Node
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    await logoutUser();
     setCurrentUser(null);
-    try {
-      localStorage.removeItem('inovex_auth_user');
-    } catch (e) {}
   };
 
   // Sync activeTab when user switches
@@ -143,11 +139,12 @@ export function App() {
     };
     window.addEventListener('inovex_telemetry_event', customEventHandler);
 
-    // 2. Connect to Local WebSocket Engine
+    // 2. Connect to Local WebSocket Engine with authentication token
     let socket = null;
     try {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/ws`;
+      const token = getAuthToken();
+      const wsUrl = `${protocol}//${window.location.host}/ws${token ? `?token=${encodeURIComponent(token)}` : ''}`;
       socket = new WebSocket(wsUrl);
 
       socket.onopen = () => {
@@ -184,26 +181,7 @@ export function App() {
       if (socket) socket.close();
       if (channel) channel.unsubscribe();
     };
-  }, []);
-
-  // Handle Switch User (RBAC Router)
-  const handleSwitchUser = async (userId) => {
-    const userFound = users.find(u => u.id === userId);
-    if (userFound) {
-      setCurrentUser(userFound);
-      try {
-        localStorage.setItem('inovex_auth_user', JSON.stringify(userFound));
-      } catch (e) {}
-      setActiveTab(userFound.role === 'founder' ? 'dashboard' : 'workspace');
-    }
-    try {
-      fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId })
-      }).catch(() => {});
-    } catch (e) {}
-  };
+  }, [currentUser]);
 
   // Simulate Spoof Signal (Security Sentinel trigger)
   const handleSimulateSpoof = async () => {
@@ -249,9 +227,9 @@ export function App() {
       <SidebarNav 
         currentUser={currentUser}
         users={users}
-        onSwitchUser={(userId) => {
+        onSwitchUser={() => {
           setInspectedEmployee(null);
-          handleSwitchUser(userId);
+          handleLogout();
         }}
         wsConnected={wsConnected}
         onSimulateSpoof={handleSimulateSpoof}
