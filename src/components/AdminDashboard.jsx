@@ -443,8 +443,8 @@ export function AdminDashboard({ currentUser, lastWsEvent, activeTab, onInspectE
         </div>
       </div>
 
-      {/* Split: Left (Dispatch + Matrix) | Right (Telemetry Feed) */}
-      <div id="section-telemetry" className="dashboard-split">
+      {/* Full-Width Telemetry & Task Dispatcher Section */}
+      <div id="section-telemetry" style={{ marginBottom: '48px' }}>
         <div>
           {/* 2. TASK DISPATCH TERMINAL (Action 1) */}
           <div className="demo-shell">
@@ -672,52 +672,6 @@ export function AdminDashboard({ currentUser, lastWsEvent, activeTab, onInspectE
                 </table>
               </div>
             )}
-          </div>
-        </div>
-
-        {/* 4. LIVE TELEMETRY FEED (SIDEBAR) */}
-        <div>
-          <div className="log-feed">
-            <div className="log-header">
-              <span className="log-title">Telemetry Stream</span>
-              <div className="live-pill" style={{ padding: '3px 8px', fontSize: '10px' }}>
-                <span className="dot"></span>
-                <span>Live</span>
-              </div>
-            </div>
-
-            <div className="log-body">
-              {telemetryLogs.length === 0 ? (
-                <div style={{ padding: '24px', textAlign: 'center', color: 'var(--muted)', fontSize: '13px' }}>
-                  Awaiting sub-second telemetry broadcast...
-                </div>
-              ) : (
-                telemetryLogs.map((log, index) => {
-                  const date = new Date(log.timestamp);
-                  const timeStr = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')}`;
-                  const isAnomaly = log.hardware_spoof_flag === 1;
-
-                  return (
-                    <div key={log.id || index} className="log-entry">
-                      <span className="log-time">{timeStr}</span>
-                      <div className={`log-msg ${isAnomaly ? 'anomaly' : ''}`}>
-                        <div>
-                          <strong>{log.user_name || log.user_id}</strong>
-                          {isAnomaly && (
-                            <span className="badge anomaly" style={{ marginLeft: '6px', fontSize: '9px', padding: '2px 6px' }}>
-                              Spoof
-                            </span>
-                          )}
-                        </div>
-                        <div className="mono" style={{ fontSize: '11px', color: 'var(--muted-2)', marginTop: '2px' }}>
-                          {log.active_window || 'Background Process'} • {log.keystroke_rate} kps
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
           </div>
         </div>
       </div>

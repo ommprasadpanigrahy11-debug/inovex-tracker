@@ -16,7 +16,8 @@ import {
   X, 
   UserCheck, 
   Database,
-  LogOut
+  LogOut,
+  FileText
 } from 'lucide-react';
 import { isSupabaseConfigured } from '../lib/supabase';
 
@@ -52,7 +53,7 @@ export function SidebarNav({
   const navItems = isFounder ? [
     { id: 'dashboard', label: 'Orchestration Grid', icon: LayoutGrid },
     { id: 'audits', label: 'Video Audits & AI', icon: Video },
-    { id: 'telemetry', label: 'Telemetry Streams', icon: Activity },
+    { id: 'telemetry', label: 'Health Telemetry', icon: Activity },
   ] : [
     { id: 'workspace', label: 'Sprint Workspace', icon: Clock },
     { id: 'sentinel', label: 'Screen Sentinel', icon: Shield },
@@ -249,6 +250,22 @@ export function SidebarNav({
                 <span className="badge-dot" style={{ background: 'var(--status-green)' }}></span>
               )}
             </button>
+
+            {/* Download User Manual Guide (PDF) */}
+            <a 
+              href="/inovex-user-manual.pdf"
+              download="INOVEX_Operations_Sentinel_User_Manual.pdf"
+              className="sidebar-action-btn manual"
+              style={{ textDecoration: 'none', color: 'inherit' }}
+              title="Download comprehensive User Manual Guide for Founders and Employees (PDF)"
+            >
+              <FileText size={15} style={{ color: 'var(--accent-strong)' }} />
+              <div style={{ textAlign: 'left', flex: 1 }}>
+                <div style={{ fontWeight: 600, fontSize: '13px', lineHeight: 1.2 }}>User Manual (PDF)</div>
+                <div style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '2px' }}>Operational Guide</div>
+              </div>
+              <Download size={13} style={{ color: 'var(--muted)' }} />
+            </a>
 
             {/* Simulate Anomaly (Founder testing trigger) */}
             {isFounder && (
