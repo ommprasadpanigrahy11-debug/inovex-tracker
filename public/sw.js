@@ -1,5 +1,5 @@
-// INOVEX Operations Sentinel v2.0 - PWA Service Worker
-const CACHE_NAME = 'inovex-tracker-v2';
+// INOVEX Operations Sentinel v3.0 - PWA Service Worker
+const CACHE_NAME = 'inovex-tracker-v3';
 const STATIC_ASSETS = [
   '/',
   '/manifest.json',

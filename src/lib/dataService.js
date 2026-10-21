@@ -14,6 +14,10 @@ export const STORAGE_KEYS = {
 
 // Base URL for backend API requests (supports separate backend deployment or same-host proxy)
 const API_BASE = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
+const isVercelHost = typeof window !== 'undefined' && window.location.hostname.endsWith('vercel.app');
+// On static Vercel host without an external backend URL, bypass local express routes and connect to Supabase
+const isStaticCloudOnly = isVercelHost && !API_BASE;
+
 export function getApiUrl(endpoint) {
   const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
   return API_BASE ? `${API_BASE}${cleanEndpoint}` : cleanEndpoint;
@@ -78,39 +82,41 @@ export async function loginUser({ email, password }) {
   const cleanEmail = email ? String(email).trim().toLowerCase() : '';
   const cleanPass = password ? String(password).trim() : '';
 
-  // 1. Try Backend Express API if reachable
-  try {
-    const res = await fetch(getApiUrl('/api/auth/login'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: cleanEmail, password: cleanPass })
-    });
+  // 1. Try Backend Express API if reachable (Skip on static Vercel host without external API)
+  if (!isStaticCloudOnly) {
+    try {
+      const res = await fetch(getApiUrl('/api/auth/login'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: cleanEmail, password: cleanPass })
+      });
 
-    const contentType = res.headers.get('content-type') || '';
-    if (contentType.includes('application/json')) {
-      const data = await res.json();
-      if (res.ok && data.success) {
-        const formattedUser = formatUserFromDb(data.user);
-        try {
-          localStorage.setItem(STORAGE_KEYS.TOKEN, data.token);
-          localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(formattedUser));
-        } catch (e) {}
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        const data = await res.json();
+        if (res.ok && data.success) {
+          const formattedUser = formatUserFromDb(data.user);
+          try {
+            localStorage.setItem(STORAGE_KEYS.TOKEN, data.token);
+            localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(formattedUser));
+          } catch (e) {}
 
-        return {
-          success: true,
-          user: formattedUser,
-          token: data.token,
-          route: data.route || (formattedUser.role === 'founder' ? '/admin-dashboard' : '/workspace')
-        };
-      } else if (res.status === 401 || res.status === 400 || res.status === 403) {
-        return { 
-          success: false, 
-          error: data.error || 'Access Denied: Invalid credentials.' 
-        };
+          return {
+            success: true,
+            user: formattedUser,
+            token: data.token,
+            route: data.route || (formattedUser.role === 'founder' ? '/admin-dashboard' : '/workspace')
+          };
+        } else if (res.status === 401 || res.status === 400 || res.status === 403) {
+          return { 
+            success: false, 
+            error: data.error || 'Access Denied: Invalid credentials.' 
+          };
+        }
       }
+    } catch (err) {
+      console.warn('[Auth API unreachable, falling back to Supabase Cloud verification]', err);
     }
-  } catch (err) {
-    console.warn('[Auth API unreachable, falling back to Supabase Cloud verification]', err);
   }
 
   // 2. Resilient Cloud Fallback (Supabase Direct)
@@ -222,43 +228,45 @@ export async function registerUser({ name, email, password, role = 'employee', s
   const mac = (device_mac_address && String(device_mac_address).trim()) || generateMacAddress();
   const userId = 'usr_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 6);
 
-  // 1. Try Backend API
-  try {
-    const res = await fetch(getApiUrl('/api/users/register'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name: cleanName,
-        email: cleanEmail,
-        password: cleanPass,
-        role,
-        skill_set: cleanSkill,
-        device_mac_address: mac,
-        bootstrapKey
-      })
-    });
+  // 1. Try Backend API (Skip on static Vercel host without external API)
+  if (!isStaticCloudOnly) {
+    try {
+      const res = await fetch(getApiUrl('/api/users/register'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: cleanName,
+          email: cleanEmail,
+          password: cleanPass,
+          role,
+          skill_set: cleanSkill,
+          device_mac_address: mac,
+          bootstrapKey
+        })
+      });
 
-    const contentType = res.headers.get('content-type') || '';
-    if (contentType.includes('application/json')) {
-      const data = await res.json();
-      if (res.ok && data.success) {
-        const formattedUser = formatUserFromDb(data.user);
-        if (data.token) {
-          try {
-            localStorage.setItem(STORAGE_KEYS.TOKEN, data.token);
-            localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(formattedUser));
-          } catch (e) {}
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        const data = await res.json();
+        if (res.ok && data.success) {
+          const formattedUser = formatUserFromDb(data.user);
+          if (data.token) {
+            try {
+              localStorage.setItem(STORAGE_KEYS.TOKEN, data.token);
+              localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(formattedUser));
+            } catch (e) {}
+          }
+          return { success: true, user: formattedUser, token: data.token };
+        } else if (res.status === 400 || res.status === 409 || res.status === 403) {
+          throw new Error(data.error || 'Registration failed');
         }
-        return { success: true, user: formattedUser, token: data.token };
-      } else {
-        throw new Error(data.error || 'Registration failed');
       }
+    } catch (err) {
+      if (err.message && (err.message.includes('already exists') || err.message.includes('restricted') || err.message.includes('required'))) {
+        throw err;
+      }
+      console.warn('[Backend Registration unavailable; engaging direct Supabase cloud persistence]', err);
     }
-  } catch (err) {
-    if (err.message && !err.message.includes('fetch') && !err.message.includes('NetworkError')) {
-      throw err;
-    }
-    console.warn('[Backend Registration unavailable; engaging direct Supabase cloud persistence]', err);
   }
 
   // 2. Direct Supabase Cloud Registration Fallback
@@ -317,19 +325,21 @@ export async function registerUser({ name, email, password, role = 'employee', s
 // 2. FETCH USERS DIRECTORY
 // ==============================================================================
 export async function fetchUsers() {
-  // 1. Try Backend API
-  try {
-    const res = await fetch(getApiUrl('/api/users'), {
-      headers: getAuthHeaders()
-    });
-    const contentType = res.headers.get('content-type') || '';
-    if (res.ok && contentType.includes('application/json')) {
-      const data = await res.json();
-      if (Array.isArray(data) && data.length > 0) {
-        return data.map(formatUserFromDb);
+  // 1. Try Backend API (Skip on static Vercel host without external API)
+  if (!isStaticCloudOnly) {
+    try {
+      const res = await fetch(getApiUrl('/api/users'), {
+        headers: getAuthHeaders()
+      });
+      const contentType = res.headers.get('content-type') || '';
+      if (res.ok && contentType.includes('application/json')) {
+        const data = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+          return data.map(formatUserFromDb);
+        }
       }
-    }
-  } catch (e) {}
+    } catch (e) {}
+  }
 
   // 2. Fallback to Supabase Cloud directly (query select('*') to gracefully adapt to table schema)
   if (isSupabaseConfigured && supabase) {
