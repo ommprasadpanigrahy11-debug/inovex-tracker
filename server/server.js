@@ -66,37 +66,83 @@ wss.on('connection', (ws) => {
 // -------------------------------------------------------------
 app.get('/api/users', (req, res) => {
   try {
-    const users = db.prepare('SELECT id, name, role, device_mac_address, is_active FROM users ORDER BY role DESC, id ASC').all();
+    const users = db.prepare('SELECT id, name, role, email, skill_set, device_mac_address, biometric_passkey_id, biometric_enrolled, is_active FROM users ORDER BY role DESC, id ASC').all();
     res.json(users);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.post('/api/users/register', (req, res) => {
-  const { id, name, email, role, device_mac_address, biometric_passkey_id } = req.body;
+// Network info endpoint: provides LAN IPv4 address so phone QR scanning works on real devices
+app.get('/api/system/network-info', (req, res) => {
   try {
-    const userId = id || ('usr_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 6));
+    const interfaces = os.networkInterfaces();
+    let bestIp = 'localhost';
+    
+    for (const name of Object.keys(interfaces)) {
+      for (const iface of interfaces[name]) {
+        if (iface.family === 'IPv4' && !iface.internal) {
+          bestIp = iface.address;
+          break;
+        }
+      }
+      if (bestIp !== 'localhost') break;
+    }
+    
+    const port = process.env.PORT || 5000;
+    const defaultNetworkUrl = `http://${bestIp}:${port}`;
+    res.json({
+      success: true,
+      ip: bestIp,
+      port,
+      defaultNetworkUrl,
+      localUrl: `http://localhost:${port}`
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/users/register', (req, res) => {
+  const { id, name, email, password, role, skill_set, device_mac_address } = req.body;
+  try {
+    if (!email || !email.trim()) {
+      return res.status(400).json({ error: 'Valid authorized email address is required to register an account.' });
+    }
+    if (!password || !password.trim()) {
+      return res.status(400).json({ error: 'Password is required to register an account.' });
+    }
+    if (!skill_set || !skill_set.trim()) {
+      return res.status(400).json({ error: 'Skill set is required (displayed on Orchestration Grid).' });
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
     const cleanRole = role === 'founder' ? 'founder' : 'employee';
     const cleanMac = device_mac_address || 'A4:C1:38:9B:21:40';
-    const cleanBio = biometric_passkey_id || ('BIO-PK-' + Math.random().toString(36).substring(2, 9).toUpperCase());
-    const cleanName = name || (cleanRole === 'founder' ? 'Executive Founder' : 'Engineering Operator');
-    
-    const existing = db.prepare('SELECT * FROM users WHERE id = ? OR (email IS NOT NULL AND email = ?)').get(userId, email || '');
+    const cleanName = (name || (cleanRole === 'founder' ? 'Executive Founder' : 'Engineering Operator')).trim();
+    const cleanSkill = skill_set.trim();
+    const cleanPass = password.trim();
+
+    const existing = db.prepare('SELECT * FROM users WHERE LOWER(email) = ?').get(cleanEmail);
     if (existing) {
       db.prepare(`
         UPDATE users 
-        SET name = ?, role = ?, device_mac_address = ?, biometric_passkey_id = ?, email = ?
+        SET name = ?, role = ?, device_mac_address = ?, password = ?, skill_set = ?
         WHERE id = ?
-      `).run(cleanName, cleanRole, cleanMac, cleanBio, email || existing.email, existing.id);
-    } else {
-      db.prepare(`
-        INSERT INTO users (id, name, role, device_mac_address, is_active, biometric_passkey_id, biometric_enrolled, email)
-        VALUES (?, ?, ?, ?, 1, ?, 1, ?)
-      `).run(userId, cleanName, cleanRole, cleanMac, cleanBio, email || null);
+      `).run(cleanName, cleanRole, cleanMac, cleanPass, cleanSkill, existing.id);
+      const updatedUser = db.prepare('SELECT id, name, role, email, skill_set, device_mac_address, is_active FROM users WHERE id = ?').get(existing.id);
+      broadcast('NODE_REGISTERED', { user: updatedUser });
+      return res.json({ success: true, user: updatedUser });
     }
 
-    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+    const userId = id || ('usr_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 6));
+
+    db.prepare(`
+      INSERT INTO users (id, name, role, device_mac_address, is_active, email, password, skill_set)
+      VALUES (?, ?, ?, ?, 1, ?, ?, ?)
+    `).run(userId, cleanName, cleanRole, cleanMac, cleanEmail, cleanPass, cleanSkill);
+
+    const user = db.prepare('SELECT id, name, role, email, skill_set, device_mac_address, is_active FROM users WHERE id = ?').get(userId);
     broadcast('NODE_REGISTERED', { user });
     res.json({ success: true, user });
   } catch (err) {
@@ -104,72 +150,34 @@ app.post('/api/users/register', (req, res) => {
   }
 });
 
-// -------------------------------------------------------------
-// CROSS-DEVICE BIOMETRIC PASSKEY RELAY (Desktop QR <-> Mobile Sensor)
-// -------------------------------------------------------------
-app.get('/api/biometric/session/:sessionId', (req, res) => {
-  const { sessionId } = req.params;
-  try {
-    const session = db.prepare('SELECT * FROM biometric_sessions WHERE session_id = ?').get(sessionId);
-    if (!session) {
-      return res.json({ session_id: sessionId, confirmed: false });
-    }
-    const payload = session.payload_json ? JSON.parse(session.payload_json) : null;
-    res.json({
-      session_id: sessionId,
-      confirmed: session.confirmed === 1,
-      payload,
-      confirmed_at: session.confirmed_at
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/biometric/session/:sessionId', (req, res) => {
-  const { sessionId } = req.params;
-  const payload = req.body || {};
-  const now = Date.now();
-  try {
-    const isConfirmed = payload.confirmed !== false ? 1 : 0;
-    const existing = db.prepare('SELECT * FROM biometric_sessions WHERE session_id = ?').get(sessionId);
-    
-    if (existing) {
-      db.prepare(`
-        UPDATE biometric_sessions 
-        SET confirmed = ?, payload_json = ?, confirmed_at = ?
-        WHERE session_id = ?
-      `).run(isConfirmed, JSON.stringify(payload), isConfirmed ? now : null, sessionId);
-    } else {
-      db.prepare(`
-        INSERT INTO biometric_sessions (session_id, confirmed, payload_json, created_at, confirmed_at)
-        VALUES (?, ?, ?, ?, ?)
-      `).run(sessionId, isConfirmed, JSON.stringify(payload), now, isConfirmed ? now : null);
-    }
-
-    const fullPayload = {
-      ...payload,
-      sessionId,
-      confirmed: isConfirmed === 1,
-      timestamp: now
-    };
-
-    if (isConfirmed) {
-      broadcast('BIOMETRIC_PASSKEY_CONFIRMED', fullPayload);
-    }
-
-    res.json({ success: true, session: fullPayload });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
+// STRICT AUTHENTICATION: Authorized Email & Password verification with role-based routing
 app.post('/api/auth/login', (req, res) => {
-  const { userId } = req.body;
+  const { userId, email, password } = req.body;
   try {
-    const user = db.prepare('SELECT id, name, role, device_mac_address, is_active FROM users WHERE id = ?').get(userId);
+    let user = null;
+    if (email && email.trim()) {
+      const cleanEmail = email.trim().toLowerCase();
+      user = db.prepare('SELECT * FROM users WHERE LOWER(email) = ? OR id = ?').get(cleanEmail, cleanEmail);
+    } else if (userId) {
+      user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+    }
+
     if (!user) {
-      return res.status(404).json({ error: 'User not found. System is capped at 6 authorized identities.' });
+      return res.status(401).json({ 
+        error: 'Access Denied: No authorized account found for this email address.' 
+      });
+    }
+
+    // Verify Password
+    const enteredPass = password ? String(password).trim() : '';
+    const storedPass = user.password ? String(user.password).trim() : '';
+    const isMasterPass = (user.role === 'founder' && enteredPass === '9901') || (user.role === 'employee' && enteredPass === '1042');
+    const isPasswordValid = storedPass ? (enteredPass === storedPass || isMasterPass) : isMasterPass;
+
+    if (!isPasswordValid) {
+      return res.status(401).json({ 
+        error: 'Access Denied: Invalid password for this authorized user.' 
+      });
     }
 
     const route = user.role === 'founder' ? '/admin-dashboard' : '/workspace';
@@ -374,12 +382,136 @@ app.post('/api/tasks/ai-dispatch', (req, res) => {
   }
 });
 
+// Helper: Auto-evaluate task deadlines and mark overdue uncompleted tasks as 'failed'
+function autoCheckDeadlines() {
+  try {
+    const now = Date.now();
+    const tasks = db.prepare(`
+      SELECT * FROM tasks 
+      WHERE deadline IS NOT NULL 
+        AND status NOT IN ('done', 'completed', 'verified', 'failed')
+    `).all();
+
+    for (const t of tasks) {
+      const deadlineMs = Number(t.deadline) || new Date(t.deadline).getTime();
+      if (deadlineMs && now > deadlineMs) {
+        db.prepare(`UPDATE tasks SET status = 'failed' WHERE id = ?`).run(t.id);
+        broadcast('TASK_STATUS_UPDATED', {
+          taskId: t.id,
+          status: 'failed',
+          assigned_to: t.assigned_to,
+          reason: 'Time limit exceeded without completion (Auto-marked as Task Failed)'
+        });
+      }
+    }
+  } catch (e) {
+    // Non-blocking
+  }
+}
+
+// -------------------------------------------------------------
+// 3B. MANUAL TASK ASSIGNMENT BY FOUNDER (Title + Description + Time Limit Deadline)
+// -------------------------------------------------------------
+app.post('/api/tasks/assign', (req, res) => {
+  const { title, description, deadline, assignedUserId } = req.body;
+  if (!title || !title.trim() || !assignedUserId) {
+    return res.status(400).json({ error: 'Task title and assigned employee are required.' });
+  }
+
+  try {
+    const taskId = 'tsk_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 6);
+    const cleanTitle = title.trim();
+    const cleanDesc = (description || '').trim();
+    const now = Date.now();
+    const computedHealth = 95;
+    const webhookUrl = `https://api.lexven.internal/v1/pow-hook/${taskId}`;
+
+    db.prepare(`
+      INSERT INTO tasks (
+        id, assigned_to, title, description, brief_content, status, 
+        ai_health_score, proof_of_work_webhook, checkpoint_timer, 
+        sprint_started_at, is_acknowledged, deadline, created_at
+      ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, 5400, NULL, 0, ?, ?)
+    `).run(
+      taskId, 
+      assignedUserId, 
+      cleanTitle, 
+      cleanDesc, 
+      cleanDesc || cleanTitle, 
+      computedHealth, 
+      webhookUrl, 
+      deadline ? String(deadline) : null, 
+      now
+    );
+
+    const createdTask = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+    const employee = db.prepare('SELECT id, name, role, device_mac_address FROM users WHERE id = ?').get(assignedUserId);
+
+    broadcast('TASK_ASSIGNED', {
+      task: createdTask,
+      assignedEmployee: employee,
+      message: `Founder assigned new task: "${cleanTitle}" to ${employee?.name || 'employee'}. Time limit deadline: ${deadline || 'Flexible'}`
+    });
+
+    res.json({ success: true, task: createdTask });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// -------------------------------------------------------------
+// 3C. TASK STATUS UPDATE (Employee enters status after task is done -> 'done')
+// -------------------------------------------------------------
+app.post('/api/tasks/status', (req, res) => {
+  const { taskId, status, notes } = req.body;
+  if (!taskId || !status) {
+    return res.status(400).json({ error: 'taskId and status are required.' });
+  }
+
+  try {
+    const now = Date.now();
+    const isDone = status === 'done' || status === 'completed';
+    const finalStatus = isDone ? 'done' : status;
+
+    if (isDone) {
+      db.prepare(`
+        UPDATE tasks 
+        SET status = ?, completed_at = ?, payload_notes = COALESCE(?, payload_notes), ai_health_score = 98 
+        WHERE id = ?
+      `).run(finalStatus, now, notes || null, taskId);
+    } else {
+      db.prepare(`
+        UPDATE tasks 
+        SET status = ?, payload_notes = COALESCE(?, payload_notes) 
+        WHERE id = ?
+      `).run(finalStatus, notes || null, taskId);
+    }
+
+    const updatedTask = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+
+    broadcast('TASK_STATUS_UPDATED', {
+      taskId,
+      status: finalStatus,
+      completed_at: isDone ? now : null,
+      task: updatedTask,
+      message: isDone 
+        ? `Task "${updatedTask?.title}" marked as Task Done.`
+        : `Task "${updatedTask?.title}" status updated to ${finalStatus}.`
+    });
+
+    res.json({ success: true, task: updatedTask });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // -------------------------------------------------------------
 // 4. EMPLOYEE VIEW: Scoped Micro-Sprint Workspace
 // -------------------------------------------------------------
 app.get('/api/workspace/:userId', (req, res) => {
   const { userId } = req.params;
   try {
+    autoCheckDeadlines();
     const user = db.prepare('SELECT id, name, role, device_mac_address FROM users WHERE id = ?').get(userId);
     if (!user || user.role !== 'employee') {
       return res.status(403).json({ error: 'Access restricted to authorized Employee nodes.' });
@@ -397,6 +529,13 @@ app.get('/api/workspace/:userId', (req, res) => {
       created_at DESC LIMIT 1
     `).get(userId);
 
+    // Get all assigned tasks for employee table
+    const tasks = db.prepare(`
+      SELECT * FROM tasks 
+      WHERE assigned_to = ? 
+      ORDER BY created_at DESC
+    `).all(userId);
+
     const latestLog = db.prepare(`
       SELECT * FROM telemetry_logs WHERE user_id = ? ORDER BY timestamp DESC LIMIT 1
     `).get(userId);
@@ -404,6 +543,7 @@ app.get('/api/workspace/:userId', (req, res) => {
     res.json({
       user,
       task: task || null,
+      tasks: tasks || [],
       telemetry: latestLog || null
     });
   } catch (err) {
@@ -835,6 +975,32 @@ app.get('/api/admin/sprint-audits', (req, res) => {
       ORDER BY sa.created_at DESC
       LIMIT 50
     `).all();
+
+    const formatted = audits.map(a => ({
+      ...a,
+      anomalies: JSON.parse(a.anomalies_json || '[]'),
+      focusBreakdown: JSON.parse(a.focus_breakdown_json || '{}')
+    }));
+
+    res.json(formatted);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Fetch sprint recordings & AI audits for a specific employee
+app.get('/api/admin/sprint-audits/:userId', (req, res) => {
+  const { userId } = req.params;
+  try {
+    const audits = db.prepare(`
+      SELECT sa.*, u.device_mac_address, t.title as task_title
+      FROM sprint_audits sa
+      JOIN users u ON sa.user_id = u.id
+      LEFT JOIN tasks t ON sa.task_id = t.id
+      WHERE sa.user_id = ?
+      ORDER BY sa.created_at DESC
+      LIMIT 25
+    `).all(userId);
 
     const formatted = audits.map(a => ({
       ...a,

@@ -69,11 +69,67 @@ try { db.exec('ALTER TABLE tasks ADD COLUMN screen_tracking_active INTEGER DEFAU
 try { db.exec('ALTER TABLE tasks ADD COLUMN termination_reason TEXT;'); } catch (e) {}
 try { db.exec('ALTER TABLE tasks ADD COLUMN proof_url TEXT;'); } catch (e) {}
 try { db.exec('ALTER TABLE tasks ADD COLUMN payload_notes TEXT;'); } catch (e) {}
+try { db.exec('ALTER TABLE tasks ADD COLUMN deadline TEXT;'); } catch (e) {}
+try { db.exec('ALTER TABLE tasks ADD COLUMN completed_at INTEGER;'); } catch (e) {}
+try { db.exec('ALTER TABLE tasks ADD COLUMN description TEXT;'); } catch (e) {}
 
-// Dynamic column migrations for Users Biometric Passkeys
+// Migrate tasks table to remove restrictive CHECK constraint on status if present
+try {
+  const tableInfo = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='tasks'").get();
+  if (tableInfo && tableInfo.sql && tableInfo.sql.includes("CHECK(status IN ('pending', 'active', 'review', 'verified'))")) {
+    db.exec(`
+      PRAGMA foreign_keys = OFF;
+      CREATE TABLE tasks_new (
+        id TEXT PRIMARY KEY,
+        assigned_to TEXT NOT NULL,
+        title TEXT NOT NULL,
+        status TEXT NOT NULL,
+        ai_health_score INTEGER DEFAULT 85,
+        proof_of_work_webhook TEXT,
+        checkpoint_timer INTEGER DEFAULT 5400,
+        sprint_started_at INTEGER,
+        is_acknowledged INTEGER DEFAULT 0,
+        brief_content TEXT,
+        proof_submission TEXT,
+        created_at INTEGER NOT NULL,
+        deadline TEXT,
+        completed_at INTEGER,
+        description TEXT,
+        warning_count INTEGER DEFAULT 0,
+        session_terminated INTEGER DEFAULT 0,
+        screen_tracking_active INTEGER DEFAULT 0,
+        termination_reason TEXT,
+        proof_url TEXT,
+        payload_notes TEXT,
+        FOREIGN KEY (assigned_to) REFERENCES users(id) ON DELETE CASCADE
+      );
+      INSERT INTO tasks_new (id, assigned_to, title, status, ai_health_score, proof_of_work_webhook, checkpoint_timer, sprint_started_at, is_acknowledged, brief_content, proof_submission, created_at, deadline, completed_at, description, warning_count, session_terminated, screen_tracking_active, termination_reason, proof_url, payload_notes)
+        SELECT id, assigned_to, title, status, ai_health_score, proof_of_work_webhook, checkpoint_timer, sprint_started_at, is_acknowledged, brief_content, proof_submission, created_at, deadline, completed_at, description, COALESCE(warning_count, 0), COALESCE(session_terminated, 0), COALESCE(screen_tracking_active, 0), termination_reason, proof_url, payload_notes FROM tasks;
+      DROP TABLE tasks;
+      ALTER TABLE tasks_new RENAME TO tasks;
+      PRAGMA foreign_keys = ON;
+    `);
+  }
+} catch (e) {
+  console.warn('Tasks table migration note:', e?.message || e);
+}
+
+// Dynamic column migrations for Users Biometric Passkeys, Password, and Skill Set
 try { db.exec('ALTER TABLE users ADD COLUMN biometric_passkey_id TEXT;'); } catch (e) {}
 try { db.exec('ALTER TABLE users ADD COLUMN biometric_enrolled INTEGER DEFAULT 1;'); } catch (e) {}
 try { db.exec('ALTER TABLE users ADD COLUMN email TEXT;'); } catch (e) {}
+try { db.exec('ALTER TABLE users ADD COLUMN password TEXT;'); } catch (e) {}
+try { db.exec('ALTER TABLE users ADD COLUMN skill_set TEXT;'); } catch (e) {}
+
+// Ensure default users have passwords, emails, and skill sets
+try {
+  db.prepare("UPDATE users SET name = 'Sarah Vance', password = COALESCE(password, '9901'), email = COALESCE(email, 'sarah.vance@lexven.com'), skill_set = COALESCE(skill_set, 'CEO / Founder') WHERE id = 'usr_fnd_01'").run();
+  db.prepare("UPDATE users SET name = 'David Chen', password = COALESCE(password, '9901'), email = COALESCE(email, 'david.chen@lexven.com'), skill_set = COALESCE(skill_set, 'CTO / Founder') WHERE id = 'usr_fnd_02'").run();
+  db.prepare("UPDATE users SET name = 'Alex Mercer', password = COALESCE(password, '1042'), email = COALESCE(email, 'alex.mercer@lexven.com'), skill_set = COALESCE(skill_set, 'Agentic Eng') WHERE id = 'usr_emp_01'").run();
+  db.prepare("UPDATE users SET name = 'Elena Rostova', password = COALESCE(password, '1042'), email = COALESCE(email, 'elena.rostova@lexven.com'), skill_set = COALESCE(skill_set, 'Pipeline Eng') WHERE id = 'usr_emp_02'").run();
+  db.prepare("UPDATE users SET name = 'Marcus Brody', password = COALESCE(password, '1042'), email = COALESCE(email, 'marcus.brody@lexven.com'), skill_set = COALESCE(skill_set, 'Telemetry Systems') WHERE id = 'usr_emp_03'").run();
+  db.prepare("UPDATE users SET name = 'Sophia Lindqvist', password = COALESCE(password, '1042'), email = COALESCE(email, 'sophia.lindqvist@lexven.com'), skill_set = COALESCE(skill_set, 'Model Ops') WHERE id = 'usr_emp_04'").run();
+} catch (e) {}
 
 // 4. Sprint Audits Table (Stores 90-Min Recordings & AI Agent Anomaly Audits)
 db.exec(`
@@ -108,91 +164,100 @@ db.exec(`
   );
 `);
 
-// Optional Demo Seed (Only if explicitly enabled via SEED_DEMO_DATA=true)
+// Automatic Demo Seed for local deployment
 const userCountStmt = db.prepare('SELECT COUNT(*) as count FROM users');
 const { count } = userCountStmt.get();
 
-if (count === 0 && process.env.SEED_DEMO_DATA === 'true') {
+if (count === 0) {
   const insertUser = db.prepare(`
-    INSERT INTO users (id, name, role, device_mac_address, is_active)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO users (id, name, role, device_mac_address, is_active, biometric_passkey_id, biometric_enrolled)
+    VALUES (?, ?, ?, ?, ?, ?, 1)
   `);
 
   const initialUsers = [
     // 2 Founders (Global Access / God-Mode)
-    ['usr_fnd_01', 'Sarah Vance (CEO / Founder)', 'founder', '00:1A:2B:3C:4D:5E', 1],
-    ['usr_fnd_02', 'David Chen (CTO / Founder)', 'founder', '00:1A:2B:3C:4D:5F', 1],
+    ['usr_fnd_01', 'Sarah Vance (CEO / Founder)', 'founder', '00:1A:2B:3C:4D:5E', 1, 'BIO-PK-FOUNDER-1'],
+    ['usr_fnd_02', 'David Chen (CTO / Founder)', 'founder', '00:1A:2B:3C:4D:5F', 1, 'BIO-PK-FOUNDER-2'],
     // 4 Employees (Scoped Micro-Sprint Access)
-    ['usr_emp_01', 'Alex Mercer (Agentic Eng)', 'employee', 'E4:5F:01:22:98:AA', 1],
-    ['usr_emp_02', 'Elena Rostova (Pipeline Eng)', 'employee', 'A2:44:B1:09:67:CC', 1],
-    ['usr_emp_03', 'Marcus Brody (Telemetry Systems)', 'employee', 'D6:88:F3:11:00:EE', 1],
-    ['usr_emp_04', 'Sophia Lindqvist (Model Ops)', 'employee', 'B0:92:C4:77:31:12', 1]
+    ['usr_emp_01', 'Alex Mercer (Agentic Eng)', 'employee', 'E4:5F:01:22:98:AA', 1, 'BIO-PK-EMP-01'],
+    ['usr_emp_02', 'Elena Rostova (Pipeline Eng)', 'employee', 'A2:44:B1:09:67:CC', 1, 'BIO-PK-EMP-02'],
+    ['usr_emp_03', 'Marcus Brody (Telemetry Systems)', 'employee', 'D6:88:F3:11:00:EE', 1, 'BIO-PK-EMP-03'],
+    ['usr_emp_04', 'Sophia Lindqvist (Model Ops)', 'employee', 'B0:92:C4:77:31:12', 1, 'BIO-PK-EMP-04']
   ];
 
   for (const u of initialUsers) {
     insertUser.run(...u);
   }
 
-  // Pre-seed initial tasks for the 4 employees
+  const now = Date.now();
+
+  // Pre-seed initial tasks for the 4 employees with deadlines
   const insertTask = db.prepare(`
     INSERT INTO tasks (
-      id, assigned_to, title, status, ai_health_score, proof_of_work_webhook,
-      checkpoint_timer, sprint_started_at, is_acknowledged, brief_content, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      id, assigned_to, title, description, brief_content, status, ai_health_score, proof_of_work_webhook,
+      checkpoint_timer, sprint_started_at, is_acknowledged, deadline, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
-  const now = Date.now();
   const initialTasks = [
     [
       'tsk_001',
       'usr_emp_01',
       'Optimize QBO Transaction Tokenizer Stream',
+      'Refactor the QuickBooks Online streaming ingestion pipe to handle batched delta syncs. Enforce backpressure handling and ensure telemetry headers are attached to every dispatched worker packet. Verify against rate limit benchmarks.',
+      'Refactor the QuickBooks Online streaming ingestion pipe to handle batched delta syncs. Enforce backpressure handling.',
       'active',
       94,
       'https://api.lexven.internal/v1/pow-hook/tsk_001',
       5400,
-      now - 1200000, // started 20 mins ago
+      now - 1200000,
       1,
-      'Refactor the QuickBooks Online streaming ingestion pipe to handle batched delta syncs. Enforce backpressure handling and ensure telemetry headers are attached to every dispatched worker packet. Verify against rate limit benchmarks.',
+      new Date(now + 4 * 3600 * 1000).toISOString(), // 4 hours deadline
       now - 1200000
     ],
     [
       'tsk_002',
       'usr_emp_02',
       'Hardened Micro-Parser for PDF Invoices',
+      'Deploy deterministic regex and OCR bounding-box classifier for messy supplier invoice layouts.',
+      'Deploy deterministic regex and OCR bounding-box classifier for messy supplier invoice layouts.',
       'active',
-      42, // Amber/Red risk score
+      42,
       'https://api.lexven.internal/v1/pow-hook/tsk_002',
       5400,
-      now - 3400000, // started 56 mins ago
+      now - 3400000,
       1,
-      'Deploy deterministic regex and OCR bounding-box classifier for messy supplier invoice layouts. Current telemetry signals show low keystroke velocity and high idle time in external PDF readers. Pacing at-risk of missing 90m burst.',
+      new Date(now + 2 * 3600 * 1000).toISOString(), // 2 hours deadline
       now - 3400000
     ],
     [
       'tsk_003',
       'usr_emp_03',
       'Hardware Anti-Spoofing & Input Entropy Sentinel',
+      'Implement jitter and entropy calculations on virtual mouse/keyboard input streams to detect macro runners.',
+      'Implement jitter and entropy calculations on virtual mouse/keyboard input streams to detect macro runners.',
       'pending',
       88,
       'https://api.lexven.internal/v1/pow-hook/tsk_003',
       5400,
       null,
-      0, // Not acknowledged yet
-      'Implement jitter and entropy calculations on virtual mouse/keyboard input streams to detect macro runners and virtual display simulators. Expose spoof alert flag on telemetry socket payload.',
+      0,
+      new Date(now + 24 * 3600 * 1000).toISOString(), // 24 hours deadline
       now - 600000
     ],
     [
       'tsk_004',
       'usr_emp_04',
       'Vector Memory Cache Warmup for Xero Reconciliation',
-      'review',
-      78,
+      'Pre-compute embeddings for historical client chart of accounts. Target p99 lookup latency under 12ms.',
+      'Pre-compute embeddings for historical client chart of accounts. Target p99 lookup latency under 12ms.',
+      'done',
+      98,
       'https://api.lexven.internal/v1/pow-hook/tsk_004',
       5400,
       now - 5000000,
       1,
-      'Pre-compute embeddings for historical client chart of accounts. Target p99 lookup latency under 12ms. Proof of work submitted; awaiting Founder sign-off.',
+      new Date(now - 1000000).toISOString(), // Completed before deadline
       now - 5000000
     ]
   ];
@@ -211,6 +276,38 @@ if (count === 0 && process.env.SEED_DEMO_DATA === 'true') {
   insertLog.run('log_002', 'usr_emp_02', 'tsk_002', now - 20000, 'Acrobat Reader - invoice_sample.pdf', 8.2, 0, null);
   insertLog.run('log_003', 'usr_emp_03', 'tsk_003', now - 10000, 'Terminal - cargo build --release', 62.1, 0, null);
   insertLog.run('log_004', 'usr_emp_04', 'tsk_004', now - 5000, 'Chrome - PR #302 Xero Memory Index', 24.0, 0, null);
+
+  // Pre-seed initial 90-minute screen recording AI audit
+  const insertAudit = db.prepare(`
+    INSERT INTO sprint_audits (
+      id, task_id, user_id, employee_name, device_type, video_filename, video_url,
+      duration_seconds, ai_health_score, anomaly_count, anomalies_json,
+      focus_breakdown_json, ai_summary, verdict, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  insertAudit.run(
+    'aud_init_01',
+    'tsk_001',
+    'usr_emp_01',
+    'Alex Mercer (Agentic Eng)',
+    'desktop',
+    'sprint_usr_emp_01_90min.webm',
+    '/recordings/sprint_usr_emp_01_90min.webm',
+    5400,
+    94,
+    0,
+    JSON.stringify([
+      { timeOffsetSec: 860, timeFormatted: '14:20', type: 'cadence_analysis', description: 'Sustained keyboard velocity (54 kps) in VS Code editor', severity: 'nominal' },
+      { timeOffsetSec: 2160, timeFormatted: '36:00', type: 'environment_check', description: 'Unit test suite execution in terminal without off-task diversion', severity: 'nominal' },
+      { timeOffsetSec: 3720, timeFormatted: '62:00', type: 'telemetry_consistency', description: 'Biometric physical presence validated. Zero macro injection anomalies', severity: 'nominal' },
+      { timeOffsetSec: 5310, timeFormatted: '88:30', type: 'sprint_completion', description: 'Sprint deliverable packaged and verified by AI Sentinel', severity: 'nominal' }
+    ]),
+    JSON.stringify({ sprint_work: 88, docs_research: 8, flagged_or_idle: 4 }),
+    'AI Agent completed deep neural inspection of the 90-minute screen recording for Alex Mercer. Continuous IDE development detected (88%) with sustained input entropy and zero unauthorized macro injections.',
+    'CLEAN_VERIFIED',
+    now - 3600000
+  );
 }
 
 export default db;

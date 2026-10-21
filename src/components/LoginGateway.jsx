@@ -11,11 +11,12 @@ import {
   UserPlus,
   LogIn,
   Cpu,
-  Fingerprint,
-  Sparkles
+  Mail,
+  User,
+  Sparkles,
+  Info
 } from 'lucide-react';
-import { registerUser, generateMacAddress } from '../lib/dataService';
-import { BiometricScannerModal } from './BiometricScannerModal';
+import { registerUser, loginUser, generateMacAddress } from '../lib/dataService';
 
 export function LoginGateway({ users = [], onLogin }) {
   // If no users exist in the system, default to register mode
@@ -29,219 +30,128 @@ export function LoginGateway({ users = [], onLogin }) {
   // Register state
   const [regName, setRegName] = useState('');
   const [regEmail, setRegEmail] = useState('');
+  const [regSkillSet, setRegSkillSet] = useState('');
   const [regMac, setRegMac] = useState(generateMacAddress());
   const [regPassword, setRegPassword] = useState('');
-  const [enrolledBioKey, setEnrolledBioKey] = useState(null);
 
   const [isLoading, setIsLoading] = useState(false);
   const [authStep, setAuthStep] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
-
-  // Biometric Scanner Modal State
-  const [isBioModalOpen, setIsBioModalOpen] = useState(false);
-  const [bioModalConfig, setBioModalConfig] = useState({
-    actionType: 'authenticate',
-    nodeIdentity: null,
-    onSuccessAction: null,
-    customTitle: null,
-    customSubtitle: null
-  });
+  const [successMsg, setSuccessMsg] = useState('');
 
   // Filter nodes for the quick access section based on role tab
   const roleUsers = users.filter(u => u.role === selectedRole);
 
-  // Trigger Biometric Verification for an Authenticating User
-  const triggerBiometricLogin = (targetUser = null) => {
-    // If no explicit user provided, resolve based on inputs or active role
-    let nodeToAuth = targetUser;
-    
-    if (!nodeToAuth) {
-      const trimmedEmail = email.trim().toLowerCase();
-      const trimmedPassword = password.trim();
+  // STRICT AUTHORIZED EMAIL & PASSWORD AUTHENTICATION
+  const handleSignInSubmit = async (e) => {
+    if (e) e.preventDefault();
+    setErrorMsg('');
+    setSuccessMsg('');
 
-      // Check master passcodes or entered credentials
-      if (trimmedPassword === '9901' || trimmedEmail === '9901' || (selectedRole === 'founder' && !trimmedEmail)) {
-        nodeToAuth = users.find(u => u.role === 'founder') || {
-          id: 'usr_founder_' + Date.now().toString(36),
-          name: 'Founder Executive',
-          email: 'founder@inovex.ai',
-          role: 'founder',
-          device_mac_address: generateMacAddress(),
-          biometric_enrolled: 1
-        };
-      } else if (trimmedPassword === '1042' || trimmedEmail === '1042' || (selectedRole === 'employee' && !trimmedEmail)) {
-        nodeToAuth = users.find(u => u.role === 'employee') || {
-          id: 'usr_eng_' + Date.now().toString(36),
-          name: 'Engineering Node #1',
-          email: 'engineer@inovex.ai',
-          role: 'employee',
-          device_mac_address: generateMacAddress(),
-          biometric_enrolled: 1
-        };
-      } else if (trimmedEmail) {
-        nodeToAuth = users.find(u => u.email.toLowerCase() === trimmedEmail) || {
-          id: 'usr_' + Date.now().toString(36),
-          name: trimmedEmail.split('@')[0].replace(/[._]/g, ' ').toUpperCase(),
-          email: trimmedEmail,
-          role: selectedRole,
-          device_mac_address: generateMacAddress(),
-          biometric_enrolled: 1
-        };
-      } else {
-        nodeToAuth = {
-          id: 'usr_' + selectedRole + '_' + Date.now().toString(36),
-          name: selectedRole === 'founder' ? 'Founder Executive' : 'Engineering Node',
-          email: selectedRole === 'founder' ? 'founder@inovex.ai' : 'engineer@inovex.ai',
-          role: selectedRole,
-          device_mac_address: generateMacAddress(),
-          biometric_enrolled: 1
-        };
-      }
+    const trimmedEmail = email.trim().toLowerCase();
+    const trimmedPassword = password.trim();
+
+    if (!trimmedEmail) {
+      setErrorMsg('Please enter your authorized node email address.');
+      return;
+    }
+    if (!trimmedPassword) {
+      setErrorMsg('Please enter your security password or master passcode.');
+      return;
     }
 
-    setBioModalConfig({
-      actionType: 'authenticate',
-      nodeIdentity: nodeToAuth,
-      customTitle: nodeToAuth.role === 'founder' 
-        ? 'Executive Biometric Passkey Scan' 
-        : 'Engineering Node Fingerprint Scan',
-      customSubtitle: nodeToAuth.role === 'founder'
-        ? 'Scan registered fingerprint to authorize global read/write command rights.'
-        : 'Scan registered fingerprint to verify workstation and unlock zero-latency sprint enclave.',
-      onSuccessAction: async (bioPayload) => {
-        setIsBioModalOpen(false);
-        setIsLoading(true);
-        setErrorMsg('');
-        setAuthStep(`Biometric Enclave Verified: ${bioPayload.biometric_passkey_id}...`);
-        
-        // Auto-save user in storage if not already registered
-        try {
-          if (!users.some(u => u.id === nodeToAuth.id || u.email === nodeToAuth.email)) {
-            await registerUser({
-              name: nodeToAuth.name,
-              email: nodeToAuth.email,
-              role: nodeToAuth.role,
-              device_mac_address: nodeToAuth.device_mac_address,
-              biometric_passkey_id: bioPayload.biometric_passkey_id
-            });
-          }
-        } catch (e) {
-          console.warn('Node auto-enroll note:', e);
-        }
+    setIsLoading(true);
+    setAuthStep('Validating credentials against authorized security registry...');
 
-        setTimeout(() => {
-          setAuthStep(`Binding node enclave: ${nodeToAuth.device_mac_address}...`);
-          setTimeout(() => {
-            setIsLoading(false);
-            setAuthStep('');
-            onLogin({
-              ...nodeToAuth,
-              biometric_session_token: bioPayload.signature_hash,
-              biometric_verified_at: Date.now()
-            });
-          }, 350);
-        }, 350);
+    try {
+      const authRes = await loginUser({ email: trimmedEmail, password: trimmedPassword });
+
+      if (!authRes || !authRes.success || !authRes.user) {
+        setIsLoading(false);
+        setAuthStep('');
+        setErrorMsg(authRes?.error || 'Access Denied: Invalid email or password.');
+        return;
       }
-    });
-    setIsBioModalOpen(true);
+
+      setAuthStep(`Binding authorized node enclave: ${authRes.user.name}...`);
+      setTimeout(() => {
+        setIsLoading(false);
+        setAuthStep('');
+        onLogin(authRes.user);
+      }, 350);
+
+    } catch (err) {
+      setIsLoading(false);
+      setAuthStep('');
+      setErrorMsg(err?.message || 'Authentication server unreachable. Please retry.');
+    }
   };
 
   const handleSelectQuickNode = (user) => {
-    setEmail(user.email);
-    setPassword('••••••••••••');
+    setEmail(user.email || '');
+    setPassword(user.role === 'founder' ? '9901' : '1042');
     setErrorMsg('');
-    triggerBiometricLogin(user);
+    setSuccessMsg(`Prefilled authorized credentials for ${user.name}`);
+    const passInput = document.getElementById('login-password-input');
+    if (passInput) passInput.focus();
   };
 
-  const handleSignInSubmit = (e) => {
-    e.preventDefault();
-    setErrorMsg('');
-    triggerBiometricLogin();
-  };
-
-  // Open Biometric Scanner for Passkey Enrollment during registration
-  const handleOpenEnrollmentScan = () => {
-    setBioModalConfig({
-      actionType: 'enroll',
-      nodeIdentity: {
-        name: regName.trim() || (selectedRole === 'founder' ? 'Founder Operator' : 'Engineering Operator'),
-        email: regEmail.trim() || 'node@organization.com',
-        role: selectedRole,
-        device_mac_address: regMac
-      },
-      customTitle: 'Enroll Biometric Fingerprint Passkey',
-      customSubtitle: 'Place finger on sensor to generate cryptographic FIDO2 hardware passkey token.',
-      onSuccessAction: (bioPayload) => {
-        setEnrolledBioKey(bioPayload.biometric_passkey_id);
-        setIsBioModalOpen(false);
-      }
-    });
-    setIsBioModalOpen(true);
-  };
-
+  // REGISTER NEW AUTHORIZED NODE
   const handleRegisterSubmit = async (e) => {
     e.preventDefault();
-    if (!regName.trim()) {
-      setErrorMsg('Please enter your full name');
-      return;
-    }
-    if (!regEmail.trim()) {
-      setErrorMsg('Please enter a valid node email address');
-      return;
-    }
-
-    // If biometric passkey not yet enrolled, prompt the scanner now
-    if (!enrolledBioKey) {
-      setBioModalConfig({
-        actionType: 'enroll',
-        nodeIdentity: {
-          name: regName.trim(),
-          email: regEmail.trim(),
-          role: selectedRole,
-          device_mac_address: regMac
-        },
-        customTitle: 'Biometric Passkey Required for Node Registration',
-        customSubtitle: 'Scan your fingerprint to bind your physical identity to this hardware enclave.',
-        onSuccessAction: async (bioPayload) => {
-          setEnrolledBioKey(bioPayload.biometric_passkey_id);
-          setIsBioModalOpen(false);
-          await executeRegistration(bioPayload.biometric_passkey_id);
-        }
-      });
-      setIsBioModalOpen(true);
-      return;
-    }
-
-    await executeRegistration(enrolledBioKey);
-  };
-
-  const executeRegistration = async (bioKey) => {
-    setIsLoading(true);
     setErrorMsg('');
-    setAuthStep('Binding biometric passkey and hardware signature...');
+    setSuccessMsg('');
+
+    const name = regName.trim();
+    const cleanEmail = regEmail.trim().toLowerCase();
+    const skillSet = regSkillSet.trim();
+    const pass = regPassword.trim();
+    const mac = regMac.trim() || generateMacAddress();
+
+    if (!name) {
+      setErrorMsg('Please enter your full name.');
+      return;
+    }
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      setErrorMsg('Please enter a valid authorized node email address.');
+      return;
+    }
+    if (!skillSet) {
+      setErrorMsg('Please enter your skill set (displayed in brackets on Orchestration Grid).');
+      return;
+    }
+    if (!pass) {
+      setErrorMsg('Please create an authorized password for this node.');
+      return;
+    }
+
+    setIsLoading(true);
+    setAuthStep('Creating authorized node and establishing enclave security...');
 
     try {
       const res = await registerUser({
-        name: regName.trim(),
-        email: regEmail.trim(),
+        name,
+        email: cleanEmail,
+        password: pass,
         role: selectedRole,
-        device_mac_address: regMac.trim() || generateMacAddress(),
-        biometric_passkey_id: bioKey
+        skill_set: skillSet,
+        device_mac_address: mac
       });
 
       if (res && res.success && res.user) {
-        setAuthStep(`Binding node enclave: ${res.user.device_mac_address}...`);
+        setAuthStep(`Enclave registered for ${res.user.name} (${res.user.skill_set}). Launching workspace...`);
         setTimeout(() => {
           setIsLoading(false);
           setAuthStep('');
           onLogin(res.user);
-        }, 500);
+        }, 400);
       } else {
-        throw new Error('Registration failed');
+        throw new Error('Registration could not be completed.');
       }
     } catch (err) {
       setIsLoading(false);
-      setErrorMsg('Could not register node. Please retry.');
+      setAuthStep('');
+      setErrorMsg(err?.message || 'Could not register node. Please retry.');
       console.error('Node registration error', err);
     }
   };
@@ -259,7 +169,7 @@ export function LoginGateway({ users = [], onLogin }) {
             Operations Sentinel v2.0
           </span>
           <p className="login-subtitle">
-            Secure Node Gateway & Zero-Latency Operations Enclave
+            Authorized Email Access Gateway & Zero-Latency Operations Enclave
           </p>
         </div>
 
@@ -274,8 +184,10 @@ export function LoginGateway({ users = [], onLogin }) {
               onClick={() => {
                 setAuthMode('signin');
                 setErrorMsg('');
+                setSuccessMsg('');
               }}
               style={{ padding: '8px 12px' }}
+              id="tab-mode-signin"
             >
               <LogIn size={13} />
               <span>Authenticate Node</span>
@@ -286,8 +198,10 @@ export function LoginGateway({ users = [], onLogin }) {
               onClick={() => {
                 setAuthMode('register');
                 setErrorMsg('');
+                setSuccessMsg('');
               }}
               style={{ padding: '8px 12px' }}
+              id="tab-mode-register"
             >
               <UserPlus size={13} />
               <span>Register New Node</span>
@@ -299,7 +213,7 @@ export function LoginGateway({ users = [], onLogin }) {
             <div style={{ background: 'var(--accent-tint-2)', border: '1px solid rgba(95, 115, 72, 0.3)', borderRadius: '8px', padding: '10px 14px', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '10px' }}>
               <Shield size={16} style={{ color: 'var(--accent-strong)', flexShrink: 0 }} />
               <div style={{ fontSize: '12px', color: 'var(--ink)' }}>
-                <strong>Production Clean Slate:</strong> No demo records exist. Register your initial Founder node below with biometric passkey to initialize the sentinel system.
+                <strong>Initial Setup:</strong> No node records exist. Register your initial Founder or Engineer node below to initialize the system.
               </div>
             </div>
           )}
@@ -312,7 +226,9 @@ export function LoginGateway({ users = [], onLogin }) {
               onClick={() => {
                 setSelectedRole('founder');
                 setErrorMsg('');
+                setSuccessMsg('');
               }}
+              id="role-tab-founder"
             >
               <Shield size={14} />
               <span>Founder / Executive</span>
@@ -323,7 +239,9 @@ export function LoginGateway({ users = [], onLogin }) {
               onClick={() => {
                 setSelectedRole('employee');
                 setErrorMsg('');
+                setSuccessMsg('');
               }}
+              id="role-tab-employee"
             >
               <Laptop size={14} />
               <span>Engineering Node</span>
@@ -335,84 +253,71 @@ export function LoginGateway({ users = [], onLogin }) {
             <form onSubmit={handleSignInSubmit} className="login-form">
               <div className="login-input-group">
                 <label className="login-label">
-                  <span>Node Email / Identifier</span>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                    <Mail size={12} style={{ color: 'var(--accent)' }} />
+                    <span>Authorized Node Email</span>
+                  </span>
                   <span className="mono" style={{ fontSize: '10px', color: 'var(--muted)' }}>
-                    {selectedRole === 'founder' ? 'Global Read/Write' : 'Assigned Sprint Only'}
+                    {selectedRole === 'founder' ? 'sarah.vance@lexven.com' : 'alex.mercer@lexven.com'}
                   </span>
                 </label>
                 <input
                   type="email"
+                  id="login-email-input"
                   className="dispatch-textarea"
                   style={{ height: '42px', padding: '10px 14px', resize: 'none' }}
-                  placeholder="Enter node email, passcode (9901 / 1042), or touch sensor..."
+                  placeholder={selectedRole === 'founder' ? 'Enter founder email (e.g. sarah.vance@lexven.com)...' : 'Enter employee email (e.g. alex.mercer@lexven.com)...'}
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   disabled={isLoading}
+                  autoComplete="email"
                 />
               </div>
 
               <div className="login-input-group">
                 <label className="login-label">
-                  <span>Security Passcode / Master Key</span>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                    <Lock size={12} style={{ color: 'var(--accent)' }} />
+                    <span>Security Password / Master Passcode</span>
+                  </span>
                   <span className="mono" style={{ fontSize: '10px', color: 'var(--muted)' }}>
-                    {selectedRole === 'founder' ? 'Master 9901' : 'Master 1042'}
+                    {selectedRole === 'founder' ? 'Default: 9901' : 'Default: 1042'}
                   </span>
                 </label>
                 <input
                   type="password"
+                  id="login-password-input"
                   className="dispatch-textarea"
                   style={{ height: '42px', padding: '10px 14px', resize: 'none' }}
-                  placeholder={selectedRole === 'founder' ? 'Enter master passcode (9901)...' : 'Enter master passcode (1042)...'}
+                  placeholder={selectedRole === 'founder' ? 'Enter password or founder master key (9901)...' : 'Enter password or employee master key (1042)...'}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   disabled={isLoading}
+                  autoComplete="current-password"
                 />
               </div>
 
-              {/* Interactive Biometric Sensor Banner */}
-              <div 
-                onClick={() => triggerBiometricLogin()}
-                style={{ 
-                  background: 'var(--bg)', 
-                  border: '1px solid var(--line)', 
-                  borderRadius: '8px', 
-                  padding: '10px 12px', 
-                  display: 'flex', 
-                  alignItems: 'center', 
-                  justifyContent: 'space-between', 
-                  gap: '8px', 
-                  margin: '4px 0 8px',
-                  cursor: 'pointer',
-                  transition: 'border-color 0.15s ease'
-                }}
-                className="hover-card"
-                title="Click to authenticate via fingerprint scanner immediately"
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <Fingerprint size={16} style={{ color: 'var(--accent-strong)' }} />
-                  <span style={{ fontSize: '12px', color: 'var(--ink)', fontWeight: '500' }}>
-                    Touch Sensor to Scan Fingerprint
-                  </span>
+              {/* Success Notification Pill */}
+              {successMsg && (
+                <div style={{ background: 'var(--status-green-bg)', border: '1px solid rgba(62, 138, 94, 0.35)', color: 'var(--status-green)', borderRadius: '6px', padding: '8px 12px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <CheckCircle2 size={13} />
+                  <span>{successMsg}</span>
                 </div>
-                <span className="badge active" style={{ fontSize: '9px', padding: '2px 8px' }}>
-                  <span className="badge-dot"></span>
-                  Sensor Live
-                </span>
-              </div>
+              )}
 
-              {/* Error Message */}
+              {/* Error Message Pill */}
               {errorMsg && (
-                <div className="login-error-pill">
+                <div className="login-error-pill" id="login-error-pill">
                   <AlertCircle size={14} />
                   <span>{errorMsg}</span>
                 </div>
               )}
 
-              {/* Primary Biometric Submit Button */}
+              {/* Primary Submit Button */}
               <button
                 type="submit"
                 className="btn btn-primary"
-                style={{ width: '100%', padding: '12px 18px', fontSize: '14px', marginTop: '6px' }}
+                style={{ width: '100%', padding: '12px 18px', fontSize: '14px', marginTop: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
                 disabled={isLoading}
                 id="btn-login-submit"
               >
@@ -423,8 +328,8 @@ export function LoginGateway({ users = [], onLogin }) {
                   </>
                 ) : (
                   <>
-                    <Fingerprint size={16} />
-                    <span>Scan Fingerprint & Authenticate Node</span>
+                    <Key size={16} />
+                    <span>Sign In to {selectedRole === 'founder' ? 'Founder Dashboard' : 'Employee Workspace'}</span>
                     <ArrowRight size={15} />
                   </>
                 )}
@@ -435,17 +340,21 @@ export function LoginGateway({ users = [], onLogin }) {
             <form onSubmit={handleRegisterSubmit} className="login-form">
               <div className="login-input-group">
                 <label className="login-label">
-                  <span>Full Name</span>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                    <User size={12} style={{ color: 'var(--accent)' }} />
+                    <span>Full Name</span>
+                  </span>
                   <span className="mono" style={{ fontSize: '10px', color: 'var(--muted)' }}>
                     Operator Identity
                   </span>
                 </label>
                 <input
                   type="text"
+                  id="reg-name-input"
                   required
                   className="dispatch-textarea"
                   style={{ height: '42px', padding: '10px 14px', resize: 'none' }}
-                  placeholder={selectedRole === 'founder' ? 'e.g. Founder Name' : 'e.g. Lead Engineer'}
+                  placeholder={selectedRole === 'founder' ? 'e.g. Dr. Alan Vance' : 'e.g. Marcus Brody'}
                   value={regName}
                   onChange={(e) => setRegName(e.target.value)}
                   disabled={isLoading}
@@ -454,17 +363,21 @@ export function LoginGateway({ users = [], onLogin }) {
 
               <div className="login-input-group">
                 <label className="login-label">
-                  <span>Node Email</span>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                    <Mail size={12} style={{ color: 'var(--accent)' }} />
+                    <span>Node Email Address</span>
+                  </span>
                   <span className="mono" style={{ fontSize: '10px', color: 'var(--muted)' }}>
-                    Workstation Address
+                    Unique Workstation Login
                   </span>
                 </label>
                 <input
                   type="email"
+                  id="reg-email-input"
                   required
                   className="dispatch-textarea"
                   style={{ height: '42px', padding: '10px 14px', resize: 'none' }}
-                  placeholder="node@organization.com"
+                  placeholder="operator@lexven.com"
                   value={regEmail}
                   onChange={(e) => setRegEmail(e.target.value)}
                   disabled={isLoading}
@@ -473,86 +386,73 @@ export function LoginGateway({ users = [], onLogin }) {
 
               <div className="login-input-group">
                 <label className="login-label">
-                  <span>Hardware MAC Signature</span>
-                  <span className="mono" style={{ fontSize: '10px', color: 'var(--muted)' }}>
-                    Enclave Enforced
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                    <Sparkles size={12} style={{ color: 'var(--accent)' }} />
+                    <span>Skill Set / Specialization (Required)</span>
+                  </span>
+                  <span className="mono" style={{ fontSize: '10px', color: 'var(--accent-strong)' }}>
+                    Displayed in Brackets on Grid
                   </span>
                 </label>
                 <input
                   type="text"
-                  className="dispatch-textarea mono"
-                  style={{ height: '42px', padding: '10px 14px', resize: 'none', fontSize: '12px' }}
-                  value={regMac}
-                  onChange={(e) => setRegMac(e.target.value)}
+                  id="reg-skillset-input"
+                  required
+                  className="dispatch-textarea"
+                  style={{ height: '42px', padding: '10px 14px', resize: 'none' }}
+                  placeholder="e.g. Agentic Eng, Cloud Pipelines, Telemetry Architecture"
+                  value={regSkillSet}
+                  onChange={(e) => setRegSkillSet(e.target.value)}
                   disabled={isLoading}
                 />
+                <div style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '3px' }}>
+                  This skill will appear in brackets on the Orchestration Grid: <em>{regName || 'Operator'} ({regSkillSet || 'Skill Set'})</em>
+                </div>
               </div>
 
-              {/* Biometric Passkey Enrollment Zone */}
               <div className="login-input-group">
                 <label className="login-label">
-                  <span>Biometric Passkey Enrollment</span>
-                  <span className="mono" style={{ fontSize: '10px', color: 'var(--accent-strong)' }}>
-                    Required Hardware Factor
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                    <Lock size={12} style={{ color: 'var(--accent)' }} />
+                    <span>Security Password</span>
                   </span>
-                </label>
-
-                {enrolledBioKey ? (
-                  <div style={{ background: 'var(--status-green-bg)', border: '1px solid rgba(62, 138, 94, 0.35)', borderRadius: '8px', padding: '10px 12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <CheckCircle2 size={16} style={{ color: 'var(--status-green)' }} />
-                      <div>
-                        <div style={{ fontSize: '12px', fontWeight: '600', color: 'var(--status-green)' }}>
-                          Fingerprint Passkey Enrolled
-                        </div>
-                        <div className="mono" style={{ fontSize: '10px', color: 'var(--muted-2)' }}>
-                          Token ID: {enrolledBioKey}
-                        </div>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      className="btn btn-secondary"
-                      style={{ fontSize: '10px', padding: '4px 8px' }}
-                      onClick={handleOpenEnrollmentScan}
-                    >
-                      Re-scan
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    className="btn-bio-trigger"
-                    onClick={handleOpenEnrollmentScan}
-                    id="btn-enroll-bio"
-                  >
-                    <Fingerprint size={16} />
-                    <span>Scan Fingerprint to Enroll Passkey</span>
-                  </button>
-                )}
-              </div>
-
-              <div className="login-input-group">
-                <label className="login-label">
-                  <span>Node Backup Passcode</span>
                   <span className="mono" style={{ fontSize: '10px', color: 'var(--muted)' }}>
-                    Secondary Factor
+                    Workstation Access Key
                   </span>
                 </label>
                 <input
                   type="password"
+                  id="reg-password-input"
+                  required
                   className="dispatch-textarea"
                   style={{ height: '42px', padding: '10px 14px', resize: 'none' }}
-                  placeholder="Create secondary backup passcode..."
+                  placeholder="Create secure account password..."
                   value={regPassword}
                   onChange={(e) => setRegPassword(e.target.value)}
                   disabled={isLoading}
                 />
               </div>
 
+              <div className="login-input-group">
+                <label className="login-label">
+                  <span>Hardware MAC Signature</span>
+                  <span className="mono" style={{ fontSize: '10px', color: 'var(--muted)' }}>
+                    Device Binding
+                  </span>
+                </label>
+                <input
+                  type="text"
+                  className="dispatch-textarea mono"
+                  style={{ height: '38px', padding: '8px 12px', resize: 'none', fontSize: '12px' }}
+                  value={regMac}
+                  onChange={(e) => setRegMac(e.target.value)}
+                  disabled={isLoading}
+                />
+              </div>
+
               {/* Error Message */}
               {errorMsg && (
-                <div className="login-error-pill">
+                <div className="login-error-pill" id="reg-error-pill">
                   <AlertCircle size={14} />
                   <span>{errorMsg}</span>
                 </div>
@@ -562,7 +462,7 @@ export function LoginGateway({ users = [], onLogin }) {
               <button
                 type="submit"
                 className="btn btn-primary"
-                style={{ width: '100%', padding: '12px 18px', fontSize: '14px', marginTop: '6px' }}
+                style={{ width: '100%', padding: '12px 18px', fontSize: '14px', marginTop: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
                 disabled={isLoading}
                 id="btn-register-submit"
               >
@@ -573,8 +473,8 @@ export function LoginGateway({ users = [], onLogin }) {
                   </>
                 ) : (
                   <>
-                    <Fingerprint size={15} />
-                    <span>Initialize Node with Biometric Key</span>
+                    <UserPlus size={15} />
+                    <span>Register & Sign In to {selectedRole === 'founder' ? 'Founder Grid' : 'Workspace'}</span>
                     <ArrowRight size={15} />
                   </>
                 )}
@@ -582,11 +482,11 @@ export function LoginGateway({ users = [], onLogin }) {
             </form>
           )}
 
-          {/* Quick Access Pre-Authorized Node Chips (Only if registered nodes exist) */}
+          {/* Quick Access Pre-Authorized Node Chips */}
           {users.length > 0 && authMode === 'signin' && (
             <div className="login-quick-section">
               <div className="section-kicker" style={{ marginBottom: '10px', fontSize: '10px', padding: '3px 10px' }}>
-                Active Registered Nodes ({selectedRole === 'founder' ? 'Founders' : 'Engineers'})
+                Quick Access Authorized Nodes ({selectedRole === 'founder' ? 'Founders' : 'Engineers'})
               </div>
               
               {roleUsers.length === 0 ? (
@@ -602,16 +502,20 @@ export function LoginGateway({ users = [], onLogin }) {
                       className="quick-node-card"
                       onClick={() => handleSelectQuickNode(user)}
                       disabled={isLoading}
-                      title={`Authenticate with biometric scan as ${user.name}`}
+                      title={`Select ${user.name} (${user.email})`}
                     >
                       <div className="quick-node-avatar">
                         {user.name.split(' ').map(n => n[0]).join('')}
                       </div>
                       <div className="quick-node-info">
-                        <div className="quick-node-name">{user.name}</div>
-                        <div className="quick-node-mac mono">{user.device_mac_address}</div>
+                        <div className="quick-node-name">
+                          {user.name} {user.skill_set ? `(${user.skill_set})` : ''}
+                        </div>
+                        <div className="quick-node-mac mono" style={{ fontSize: '10px', color: 'var(--accent-strong)' }}>
+                          {user.email}
+                        </div>
                       </div>
-                      <Fingerprint size={14} className="quick-node-arr" style={{ color: 'var(--accent)' }} />
+                      <ArrowRight size={14} className="quick-node-arr" style={{ color: 'var(--accent)' }} />
                     </button>
                   ))}
                 </div>
@@ -623,29 +527,13 @@ export function LoginGateway({ users = [], onLogin }) {
           <div className="login-footer-security">
             <Cpu size={12} style={{ color: 'var(--accent)' }} />
             <span className="mono">
-              Biometric Fingerprint Scan • Hardware MAC Handshake • Zero-Trust Enclave
+              Strict Authorized Email & Passcode Verification • Zero-Trust Hardware Enclave
             </span>
           </div>
 
         </div>
 
       </div>
-
-      {/* Interactive Biometric Fingerprint Scanner HUD Modal */}
-      <BiometricScannerModal 
-        isOpen={isBioModalOpen}
-        onClose={() => setIsBioModalOpen(false)}
-        onSuccess={(bioPayload) => {
-          if (bioModalConfig.onSuccessAction) {
-            bioModalConfig.onSuccessAction(bioPayload);
-          }
-        }}
-        nodeIdentity={bioModalConfig.nodeIdentity}
-        actionType={bioModalConfig.actionType}
-        customTitle={bioModalConfig.customTitle}
-        customSubtitle={bioModalConfig.customSubtitle}
-      />
-
     </div>
   );
 }

@@ -2,9 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { SidebarNav } from './components/SidebarNav';
 import { AdminDashboard } from './components/AdminDashboard';
 import { EmployeeWorkspace } from './components/EmployeeWorkspace';
+import { FounderEmployeeView } from './components/FounderEmployeeView';
 import { InstallAppModal } from './components/InstallAppModal';
 import { LoginGateway } from './components/LoginGateway';
-import { MobileBiometricTerminal } from './components/MobileBiometricTerminal';
 import { AlertTriangle, X, ShieldAlert } from 'lucide-react';
 import { fetchUsers, simulateHardwareSpoof } from './lib/dataService';
 import { isSupabaseConfigured, initRealtimeChannel } from './lib/supabase';
@@ -215,19 +215,6 @@ export function App() {
     }
   };
 
-  // Handle Cross-Device Mobile Biometric Relay Terminal
-  const urlParams = new URLSearchParams(window.location.search);
-  if (
-    urlParams.has('bio_session') || 
-    urlParams.has('verify') || 
-    urlParams.has('session') || 
-    urlParams.has('terminal') || 
-    urlParams.has('pin') ||
-    urlParams.has('pair')
-  ) {
-    return <MobileBiometricTerminal />;
-  }
-
   if (isInitializing) {
     return (
       <div style={{ display: 'flex', height: '100vh', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)', color: 'var(--ink)', fontFamily: 'var(--font-sans)' }}>
@@ -321,10 +308,10 @@ export function App() {
         {/* Dynamic View Routing Based on Role */}
         {isFounder ? (
           inspectedEmployee ? (
-            <EmployeeWorkspace 
-              currentUser={inspectedEmployee} 
+            <FounderEmployeeView 
+              currentUser={currentUser}
+              employee={inspectedEmployee} 
               lastWsEvent={lastWsEvent}
-              isFounderInspecting={true}
               onBackToFounder={() => setInspectedEmployee(null)}
             />
           ) : (

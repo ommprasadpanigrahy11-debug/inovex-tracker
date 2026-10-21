@@ -19,9 +19,13 @@ import {
   Clock,
   X,
   ExternalLink,
-  Fingerprint
+  TrendingUp,
+  LayoutGrid,
+  Maximize2,
+  Minimize2
 } from 'lucide-react';
 import { fetchAdminData, dispatchSprintTask } from '../lib/dataService';
+import { TelemetryGraphView } from './TelemetryGraphView';
 
 export function AdminDashboard({ currentUser, lastWsEvent, activeTab, onInspectEmployee }) {
   const [gridUsers, setGridUsers] = useState([]);
@@ -31,6 +35,7 @@ export function AdminDashboard({ currentUser, lastWsEvent, activeTab, onInspectE
   const [selectedAudit, setSelectedAudit] = useState(null);
   const [videoError, setVideoError] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [telemetryViewMode, setTelemetryViewMode] = useState('graph'); // 'graph' (default per user directive) or 'tabular'
   const videoPlayerRef = useRef(null);
 
   // Smooth scroll to section when activeTab changes
@@ -341,7 +346,9 @@ export function AdminDashboard({ currentUser, lastWsEvent, activeTab, onInspectE
                     ) : (
                       <Laptop size={16} style={{ color: 'var(--muted)' }} />
                     )}
-                    <span className="node-name">{user.name}</span>
+                    <span className="node-name">
+                      {user.name} {user.skill_set ? `(${user.skill_set})` : ''}
+                    </span>
                   </div>
                   <span className={`badge ${isFounder ? 'founder' : isSpoofed ? 'anomaly' : 'active'}`}>
                     <span className="badge-dot"></span>
@@ -351,9 +358,8 @@ export function AdminDashboard({ currentUser, lastWsEvent, activeTab, onInspectE
 
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap', marginTop: '6px' }}>
                   <div className="node-mac" style={{ margin: 0 }}>MAC: {user.device_mac_address}</div>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: 'var(--status-green)', fontSize: '10px', fontFamily: 'var(--font-mono)', fontWeight: '500' }}>
-                    <Fingerprint size={12} />
-                    <span>Bio Passkey Enrolled</span>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: 'var(--accent-strong)', fontSize: '10px', fontFamily: 'var(--font-mono)', fontWeight: '500' }}>
+                    <span>{user.email || 'Authorized Node'}</span>
                   </span>
                 </div>
 
@@ -511,89 +517,158 @@ export function AdminDashboard({ currentUser, lastWsEvent, activeTab, onInspectE
             )}
           </div>
 
-          {/* 3. PREDICTIVE HEALTH MATRIX */}
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
+          {/* 3. CONTINUOUS HEALTH TELEMETRY & WAVEFORM STREAM (Action 2) */}
+          <div style={{ marginBottom: '36px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
               <div>
                 <div className="section-kicker" style={{ marginBottom: '4px' }}>02 Health Telemetry</div>
-                <h3 className="serif" style={{ fontSize: '24px', color: 'var(--ink)' }}>Predictive Health Matrix</h3>
+                <h3 className="serif" style={{ fontSize: '24px', color: 'var(--ink)', margin: 0 }}>
+                  {telemetryViewMode === 'graph' ? 'Live Telemetry Waveform Graph' : 'Predictive Health Matrix'}
+                </h3>
               </div>
-              <span className="mono" style={{ fontSize: '11px', color: 'var(--muted)' }}>
-                {healthMatrix.length} active micro-sprints
-              </span>
+
+              {/* View Switcher: Graph View (Default) vs Tabular Format */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <div style={{
+                  display: 'inline-flex',
+                  background: 'var(--bg-warm)',
+                  border: '1px solid var(--line)',
+                  borderRadius: '8px',
+                  padding: '3px'
+                }}>
+                  <button
+                    type="button"
+                    onClick={() => setTelemetryViewMode('graph')}
+                    style={{
+                      background: telemetryViewMode === 'graph' ? 'var(--card)' : 'transparent',
+                      color: telemetryViewMode === 'graph' ? 'var(--ink)' : 'var(--muted)',
+                      fontWeight: telemetryViewMode === 'graph' ? '600' : '400',
+                      border: telemetryViewMode === 'graph' ? '1px solid var(--line)' : 'none',
+                      boxShadow: telemetryViewMode === 'graph' ? '0 1px 3px rgba(0,0,0,0.05)' : 'none',
+                      padding: '5px 12px',
+                      borderRadius: '6px',
+                      fontSize: '12px',
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      transition: 'all 0.15s ease'
+                    }}
+                    id="btn-telemetry-graph-view"
+                  >
+                    <TrendingUp size={13} style={{ color: 'var(--accent-strong)' }} />
+                    <span>Graph View</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setTelemetryViewMode('tabular')}
+                    style={{
+                      background: telemetryViewMode === 'tabular' ? 'var(--card)' : 'transparent',
+                      color: telemetryViewMode === 'tabular' ? 'var(--ink)' : 'var(--muted)',
+                      fontWeight: telemetryViewMode === 'tabular' ? '600' : '400',
+                      border: telemetryViewMode === 'tabular' ? '1px solid var(--line)' : 'none',
+                      boxShadow: telemetryViewMode === 'tabular' ? '0 1px 3px rgba(0,0,0,0.05)' : 'none',
+                      padding: '5px 12px',
+                      borderRadius: '6px',
+                      fontSize: '12px',
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      transition: 'all 0.15s ease'
+                    }}
+                    id="btn-telemetry-table-view"
+                  >
+                    <LayoutGrid size={13} style={{ color: 'var(--muted)' }} />
+                    <span>Tabular Format</span>
+                  </button>
+                </div>
+              </div>
             </div>
 
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Task ID</th>
-                    <th>Node</th>
-                    <th>Sprint Title</th>
-                    <th>Window Focus</th>
-                    <th>Pacing Health</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {healthMatrix.length === 0 ? (
+            {/* Conditionally render Graph View (Default) or Tabular Matrix */}
+            {telemetryViewMode === 'graph' ? (
+              <TelemetryGraphView
+                healthMatrix={healthMatrix}
+                telemetryLogs={telemetryLogs}
+                gridUsers={gridUsers}
+                lastWsEvent={lastWsEvent}
+                onInspectEmployee={onInspectEmployee}
+              />
+            ) : (
+              <div className="table-wrap">
+                <table>
+                  <thead>
                     <tr>
-                      <td colSpan={6} style={{ textAlign: 'center', padding: '36px 16px', color: 'var(--muted)', fontSize: '13px' }}>
-                        No active micro-sprints dispatched yet. Use the Autonomous Sprint Dispatcher above to assign work to connected nodes.
-                      </td>
+                      <th>Task ID</th>
+                      <th>Node</th>
+                      <th>Sprint Title</th>
+                      <th>Window Focus</th>
+                      <th>Pacing Health</th>
+                      <th>Status</th>
                     </tr>
-                  ) : (
-                    healthMatrix.map((task) => {
-                    const healthClass = getHealthClass(task.ai_health_score);
-                    return (
-                      <tr key={task.task_id}>
-                        <td className="mono" style={{ fontSize: '12px', color: 'var(--accent-strong)', fontWeight: '500' }}>
-                          {task.task_id}
-                        </td>
-                        <td>
-                          <div style={{ fontWeight: '500', color: 'var(--ink)', fontSize: '13px' }}>{task.employee_name}</div>
-                          <div className="mono" style={{ fontSize: '10px', color: 'var(--muted-2)' }}>{task.device_mac_address}</div>
-                        </td>
-                        <td style={{ maxWidth: '200px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: 'var(--ink)' }}>
-                          {task.title}
-                        </td>
-                        <td className="mono" style={{ fontSize: '11px', color: 'var(--muted)' }}>
-                          {task.current_window || 'Terminal'}
-                        </td>
-                        <td style={{ width: '130px' }}>
-                          <div className="health-meter">
-                            <div className="meter-track">
-                              <div className={`meter-fill ${healthClass}`} style={{ width: `${task.ai_health_score}%` }}></div>
-                            </div>
-                            <span className="mono" style={{ fontSize: '11px', fontWeight: '600' }}>
-                              {task.ai_health_score}
-                            </span>
-                          </div>
-                        </td>
-                        <td>
-                          {task.hardware_spoof_flag ? (
-                            <span className="badge anomaly">
-                              <span className="badge-dot"></span>
-                              Anomaly
-                            </span>
-                          ) : task.ai_health_score >= 75 ? (
-                            <span className="badge active">
-                              <span className="badge-dot"></span>
-                              On Track
-                            </span>
-                          ) : (
-                            <span className="badge caution">
-                              <span className="badge-dot"></span>
-                              Cautionary
-                            </span>
-                          )}
+                  </thead>
+                  <tbody>
+                    {healthMatrix.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} style={{ textAlign: 'center', padding: '36px 16px', color: 'var(--muted)', fontSize: '13px' }}>
+                          No active micro-sprints dispatched yet. Use the Autonomous Sprint Dispatcher above to assign work to connected nodes.
                         </td>
                       </tr>
-                    );
-                  }))}
-                </tbody>
-              </table>
-            </div>
+                    ) : (
+                      healthMatrix.map((task) => {
+                      const healthClass = getHealthClass(task.ai_health_score);
+                      return (
+                        <tr key={task.task_id}>
+                          <td className="mono" style={{ fontSize: '12px', color: 'var(--accent-strong)', fontWeight: '500' }}>
+                            {task.task_id}
+                          </td>
+                          <td>
+                            <div style={{ fontWeight: '500', color: 'var(--ink)', fontSize: '13px' }}>{task.employee_name}</div>
+                            <div className="mono" style={{ fontSize: '10px', color: 'var(--muted-2)' }}>{task.device_mac_address}</div>
+                          </td>
+                          <td style={{ maxWidth: '200px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: 'var(--ink)' }}>
+                            {task.title}
+                          </td>
+                          <td className="mono" style={{ fontSize: '11px', color: 'var(--muted)' }}>
+                            {task.current_window || 'Terminal'}
+                          </td>
+                          <td style={{ width: '130px' }}>
+                            <div className="health-meter">
+                              <div className="meter-track">
+                                <div className={`meter-fill ${healthClass}`} style={{ width: `${task.ai_health_score}%` }}></div>
+                              </div>
+                              <span className="mono" style={{ fontSize: '11px', fontWeight: '600' }}>
+                                {task.ai_health_score}
+                              </span>
+                            </div>
+                          </td>
+                          <td>
+                            {task.hardware_spoof_flag ? (
+                              <span className="badge anomaly">
+                                <span className="badge-dot"></span>
+                                Anomaly
+                              </span>
+                            ) : task.ai_health_score >= 75 ? (
+                              <span className="badge active">
+                                <span className="badge-dot"></span>
+                                On Track
+                              </span>
+                            ) : (
+                              <span className="badge caution">
+                                <span className="badge-dot"></span>
+                                Cautionary
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    }))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </div>
 

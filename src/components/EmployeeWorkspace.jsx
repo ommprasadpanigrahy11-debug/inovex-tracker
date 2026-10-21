@@ -20,12 +20,19 @@ import {
   Play,
   Square,
   Zap,
-  Fingerprint,
   X
 } from 'lucide-react';
-import { fetchWorkspaceData, startSprintSession, submitProofOfWork, triggerAiActivityCheck, sendTelemetryBeat } from '../lib/dataService';
+import { 
+  fetchWorkspaceData, 
+  startSprintSession, 
+  submitProofOfWork, 
+  triggerAiActivityCheck, 
+  sendTelemetryBeat,
+  computeTaskStatus,
+  updateTaskStatus
+} from '../lib/dataService';
 import { uploadRecordingToSupabase } from '../lib/supabase';
-import { BiometricScannerModal } from './BiometricScannerModal';
+import { FounderEmployeeView } from './FounderEmployeeView';
 
 export function EmployeeWorkspace({ 
   currentUser, 
@@ -33,6 +40,18 @@ export function EmployeeWorkspace({
   isFounderInspecting = false,
   onBackToFounder = null 
 }) {
+  // If Founder is inspecting this employee node, route directly to FounderEmployeeView
+  if (isFounderInspecting) {
+    return (
+      <FounderEmployeeView 
+        currentUser={{ role: 'founder' }}
+        employee={currentUser}
+        lastWsEvent={lastWsEvent}
+        onBackToFounder={onBackToFounder}
+      />
+    );
+  }
+
   const [workspaceData, setWorkspaceData] = useState(null);
   const [selectedTaskId, setSelectedTaskId] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -305,31 +324,6 @@ export function EmployeeWorkspace({
     }
   };
 
-  // Biometric Passkey Scanner State for Engineering Node
-  const [isBioModalOpen, setIsBioModalOpen] = useState(false);
-  const [bioModalConfig, setBioModalConfig] = useState({
-    actionType: 'sprint_authorize',
-    onSuccessAction: null,
-    customTitle: null,
-    customSubtitle: null
-  });
-  const [bioSignedToken, setBioSignedToken] = useState(null);
-
-  // Trigger Biometric Scan before starting 90-minute locked sprint
-  const handleStartSprintWithBio = () => {
-    setBioModalConfig({
-      actionType: 'sprint_authorize',
-      customTitle: 'Engineering Node Biometric Authorization',
-      customSubtitle: 'Scan your registered fingerprint to authorize the 90-minute locked workstation and 60 FPS screen sentinel.',
-      onSuccessAction: (bioPayload) => {
-        setIsBioModalOpen(false);
-        setBioSignedToken(bioPayload.signature_hash);
-        executeStartSprint();
-      }
-    });
-    setIsBioModalOpen(true);
-  };
-
   // Start Sprint & Screen Tracking (90 minutes fixed)
   const executeStartSprint = async () => {
     try {
@@ -536,46 +530,45 @@ export function EmployeeWorkspace({
     }
   };
 
-  // Submit Proof of Work with Biometric Sign-off
-  const handleSubmitProofOfWork = (e) => {
+  // Submit Proof of Work Directly
+  const handleSubmitProofOfWork = async (e) => {
     e.preventDefault();
     if (!prUrl.trim()) return;
 
-    // Trigger Biometric Sign-off Modal
-    setBioModalConfig({
-      actionType: 'pow_sign',
-      customTitle: 'Biometric Deliverable Sign-off',
-      customSubtitle: 'Scan your physical fingerprint to cryptographically seal this deliverable commit before dispatching to Founder.',
-      onSuccessAction: async (bioPayload) => {
-        setIsBioModalOpen(false);
-        setIsSubmitting(true);
-        try {
-          const currentTaskId = workspaceData?.task?.id || ('tsk_' + Date.now());
-          const res = await submitProofOfWork(
-            currentTaskId, 
-            currentUser.id, 
-            prUrl, 
-            payloadNotes, 
-            bioPayload.signature_hash
-          );
-          setIsSubmitting(false);
-          if (res && res.success) {
-            setSubmissionSuccess(true);
-            fetchWorkspace();
-          }
-        } catch (err) {
-          console.error('Failed to submit PoW', err);
-          setIsSubmitting(false);
-        }
+    setIsSubmitting(true);
+    try {
+      const currentTaskId = workspaceData?.task?.id || ('tsk_' + Date.now());
+      const res = await submitProofOfWork(
+        currentTaskId, 
+        currentUser.id, 
+        prUrl, 
+        payloadNotes
+      );
+      setIsSubmitting(false);
+      if (res && res.success) {
+        setSubmissionSuccess(true);
+        fetchWorkspace();
       }
-    });
-    setIsBioModalOpen(true);
+    } catch (err) {
+      console.error('Failed to submit PoW', err);
+      setIsSubmitting(false);
+    }
   };
 
   const formatTime = (secs) => {
     const m = Math.floor(secs / 60).toString().padStart(2, '0');
     const s = (secs % 60).toString().padStart(2, '0');
     return `${m}:${s}`;
+  };
+
+  // Employee action: mark assigned task as completed
+  const handleMarkTaskDone = async (taskId) => {
+    try {
+      await updateTaskStatus(taskId, 'done', 'Completed by employee directive execution', currentUser.id);
+      fetchWorkspace();
+    } catch (err) {
+      console.error('Failed to mark task as done', err);
+    }
   };
 
   const allTasks = (workspaceData?.tasks && workspaceData.tasks.length > 0)
@@ -739,11 +732,11 @@ export function EmployeeWorkspace({
         </p>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginTop: '6px' }}>
           <span className="badge active" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '11px', padding: '4px 10px' }}>
-            <Fingerprint size={13} style={{ color: 'var(--status-green)' }} />
-            <span>Biometric Hardware Passkey Enforced (FIDO2)</span>
+            <Shield size={13} style={{ color: 'var(--status-green)' }} />
+            <span>Authorized Workstation Enclave</span>
           </span>
           <span className="mono" style={{ fontSize: '11px', color: 'var(--muted-2)' }}>
-            Physical Sensor Bound: <strong>{currentUser.device_mac_address}</strong>
+            Node Bound: <strong>{currentUser.email || currentUser.device_mac_address}</strong>
           </span>
         </div>
       </div>
@@ -766,25 +759,33 @@ export function EmployeeWorkspace({
           <table style={{ width: '100%' }}>
             <thead>
               <tr>
-                <th style={{ width: '70px' }}>Sl. No</th>
-                <th>Task</th>
-                <th style={{ width: '140px' }}>Time Limit</th>
-                <th style={{ width: '130px' }}>Status</th>
+                <th style={{ width: '60px' }}>Sl. No</th>
+                <th>Task Directive & Requirements</th>
+                <th style={{ width: '220px' }}>Time Limit (Deadline)</th>
+                <th style={{ width: '150px' }}>Status</th>
+                <th style={{ width: '150px' }}>Action</th>
               </tr>
             </thead>
             <tbody>
               {allTasks.length === 0 ? (
                 <tr>
-                  <td colSpan={4} style={{ textAlign: 'center', padding: '26px 16px', color: 'var(--muted)' }}>
+                  <td colSpan={5} style={{ textAlign: 'center', padding: '26px 16px', color: 'var(--muted)' }}>
                     No tasks assigned to this employee workspace yet. Directives dispatched by the Founder will appear here in real-time.
                   </td>
                 </tr>
               ) : (
                 allTasks.map((t, idx) => {
                   const isSelected = currentTask?.id === t.id;
-                  const isVerified = t.status === 'verified';
-                  const isReview = t.status === 'review';
-                  const isActive = t.status === 'active';
+                  const comp = computeTaskStatus(t);
+                  const deadlineFormatted = t.deadline
+                    ? new Date(t.deadline).toLocaleString('en-US', {
+                        month: 'short',
+                        day: 'numeric',
+                        year: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                      })
+                    : 'No hard deadline';
 
                   return (
                     <tr 
@@ -794,7 +795,7 @@ export function EmployeeWorkspace({
                         cursor: 'pointer',
                         background: isSelected ? 'var(--accent-tint-2)' : undefined
                       }}
-                      title="Select task to view sprint objective and submit deliverables"
+                      title="Select task to inspect directive details"
                     >
                       <td className="mono" style={{ fontWeight: '600', color: isSelected ? 'var(--accent-strong)' : 'var(--muted)' }}>
                         {String(idx + 1).padStart(2, '0')}
@@ -803,23 +804,97 @@ export function EmployeeWorkspace({
                         <div style={{ fontWeight: '600', color: 'var(--ink)', fontSize: '13px' }}>
                           {t.title}
                         </div>
-                        {t.brief_content && (
-                          <div style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '440px' }}>
-                            {t.brief_content}
+                        {(t.description || t.brief_content) && (
+                          <div style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '420px' }}>
+                            {t.description || t.brief_content}
                           </div>
                         )}
-                      </td>
-                      <td className="mono" style={{ fontSize: '12px', color: 'var(--ink)' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                          <Clock size={12} style={{ color: 'var(--accent-strong)' }} />
-                          <span>90 Mins Fixed</span>
+                        <div className="mono" style={{ fontSize: '10px', color: 'var(--muted-2)', marginTop: '2px' }}>
+                          ID: {t.id}
                         </div>
                       </td>
                       <td>
-                        <span className={`badge ${isActive ? 'active' : isReview ? 'founder' : isVerified ? 'active' : 'waiting'}`} style={{ fontSize: '10px', padding: '2px 8px' }}>
-                          <span className="badge-dot"></span>
-                          {t.status ? (t.status === 'review' ? 'Under Review' : t.status.charAt(0).toUpperCase() + t.status.slice(1)) : 'Pending'}
-                        </span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '12px', color: 'var(--ink)' }}>
+                          <Clock size={12} style={{ color: comp.state === 'failed' ? 'var(--status-red)' : comp.state === 'done' ? 'var(--status-green)' : 'var(--accent-strong)' }} />
+                          <span>{deadlineFormatted}</span>
+                        </div>
+                        {t.deadline && (
+                          <div style={{ marginTop: '3px' }}>
+                            {comp.state === 'done' ? (
+                              <span style={{ fontSize: '10px', color: 'var(--status-green)', fontFamily: 'var(--font-mono)' }}>
+                                ✓ Completed in time
+                              </span>
+                            ) : comp.state === 'failed' ? (
+                              <span style={{ fontSize: '10px', color: 'var(--status-red)', fontFamily: 'var(--font-mono)', background: 'var(--status-red-bg)', padding: '1px 5px', borderRadius: '4px' }}>
+                                ⚠ Time limit expired
+                              </span>
+                            ) : (
+                              <span style={{ fontSize: '10px', color: 'var(--accent-strong)', fontFamily: 'var(--font-mono)', background: 'var(--accent-tint-2)', padding: '1px 5px', borderRadius: '4px' }}>
+                                ⏳ {comp.remainingText || 'In Progress'}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </td>
+                      <td>
+                        {comp.state === 'done' ? (
+                          <span className="badge" style={{
+                            background: 'var(--status-green-bg)',
+                            color: 'var(--status-green)',
+                            border: '1px solid rgba(62, 138, 94, 0.4)',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            padding: '3px 8px',
+                            fontSize: '11px'
+                          }}>
+                            <CheckCircle2 size={12} />
+                            <span>Task Done</span>
+                          </span>
+                        ) : comp.state === 'failed' ? (
+                          <span className="badge" style={{
+                            background: 'var(--status-red-bg)',
+                            color: 'var(--status-red)',
+                            border: '1px solid rgba(184, 66, 66, 0.4)',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            padding: '3px 8px',
+                            fontSize: '11px'
+                          }}>
+                            <AlertOctagon size={12} />
+                            <span>Task Failed</span>
+                          </span>
+                        ) : (
+                          <span className="badge active" style={{ fontSize: '11px', padding: '3px 8px' }}>
+                            <span className="badge-dot"></span>
+                            {comp.label}
+                          </span>
+                        )}
+                      </td>
+                      <td>
+                        {comp.state !== 'done' && comp.state !== 'failed' ? (
+                          <button
+                            type="button"
+                            className="btn btn-primary"
+                            style={{ fontSize: '11px', padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleMarkTaskDone(t.id);
+                            }}
+                          >
+                            <CheckCircle2 size={12} />
+                            <span>Mark as Done</span>
+                          </button>
+                        ) : comp.state === 'done' ? (
+                          <span style={{ fontSize: '11px', color: 'var(--status-green)', fontWeight: '500' }}>
+                            ✓ Finished
+                          </span>
+                        ) : (
+                          <span style={{ fontSize: '11px', color: 'var(--status-red)' }}>
+                            Overdue (Failed)
+                          </span>
+                        )}
                       </td>
                     </tr>
                   );
@@ -867,11 +942,11 @@ export function EmployeeWorkspace({
                 <button 
                   className="btn btn-primary"
                   style={{ width: '100%', padding: '12px 18px', fontSize: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
-                  onClick={handleStartSprintWithBio}
+                  onClick={executeStartSprint}
                   id="btn-start-sprint"
                 >
-                  <Fingerprint size={16} />
-                  <span>Biometric Scan & Start 90-Min Sprint</span>
+                  <Play size={16} />
+                  <span>Start 90-Minute Sprint</span>
                 </button>
               )}
 
@@ -1212,21 +1287,6 @@ export function EmployeeWorkspace({
           </span>
         </div>
       </div>
-
-      {/* Biometric Passkey Fingerprint Scanner Modal for Engineering Node */}
-      <BiometricScannerModal
-        isOpen={isBioModalOpen}
-        onClose={() => setIsBioModalOpen(false)}
-        onSuccess={(bioPayload) => {
-          if (bioModalConfig.onSuccessAction) {
-            bioModalConfig.onSuccessAction(bioPayload);
-          }
-        }}
-        nodeIdentity={currentUser}
-        actionType={bioModalConfig.actionType}
-        customTitle={bioModalConfig.customTitle}
-        customSubtitle={bioModalConfig.customSubtitle}
-      />
 
     </div>
   );
