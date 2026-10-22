@@ -119,7 +119,42 @@ app.use(cors({
 }));
 
 app.use(express.json({ limit: '6mb' }));
-app.use('/api/avatars', express.static(avatarsDir));
+
+// Universal Path Traversal Sentinel (Blocks directory traversal attacks across all endpoints)
+app.use((req, res, next) => {
+  let decodedUrl = req.url;
+  try {
+    decodedUrl = decodeURIComponent(req.url);
+  } catch (e) {
+    return res.status(400).json({ error: 'Malformed URL encoding rejected.' });
+  }
+  if (req.url.includes('..') || req.url.includes('%2e%2e') || req.url.includes('%2E%2E') || decodedUrl.includes('..')) {
+    return res.status(400).json({ error: 'Malicious path traversal sequence rejected.' });
+  }
+  next();
+});
+
+// Secure Profile Avatar Delivery Endpoint (Path-traversal safe, extension validated)
+app.get('/api/avatars/:filename', (req, res) => {
+  const rawFilename = req.params.filename;
+  if (rawFilename.includes('/') || rawFilename.includes('\\') || rawFilename.includes('..')) {
+    return res.status(400).json({ error: 'Path traversal detected.' });
+  }
+  const safeFilename = path.basename(rawFilename);
+  if (!/^[a-zA-Z0-9_.-]+$/.test(safeFilename)) {
+    return res.status(400).json({ error: 'Invalid avatar filename format.' });
+  }
+  const allowedExts = ['.jpg', '.jpeg', '.png', '.webp', '.svg', '.gif'];
+  const ext = path.extname(safeFilename).toLowerCase();
+  if (!allowedExts.includes(ext)) {
+    return res.status(400).json({ error: 'Disallowed file extension.' });
+  }
+  const filePath = path.join(avatarsDir, safeFilename);
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: 'Avatar not found.' });
+  }
+  res.sendFile(filePath);
+});
 
 // API Health Check
 app.get('/api/health', (req, res) => {
@@ -138,15 +173,7 @@ const uploadLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 10, message:
 
 // Protected Video Stream Endpoint (Prevents unauthorized public access to employee screen recordings)
 app.get('/recordings/:filename', (req, res) => {
-  const rawFilename = req.params.filename;
-  const safeFilename = path.basename(rawFilename); // Prevent path traversal (../)
-  const filePath = path.join(recordingsDir, safeFilename);
-
-  if (!fs.existsSync(filePath)) {
-    return res.status(404).json({ error: 'Recording file not found.' });
-  }
-
-  // Authorize request via Token in Query or Header
+  // 1. Authorize request via Token in Query or Header FIRST (Fail-Closed)
   const token = req.query.token || req.headers['authorization']?.replace('Bearer ', '') || req.headers['x-session-token'];
   const user = validateSessionToken(token);
 
@@ -154,10 +181,26 @@ app.get('/recordings/:filename', (req, res) => {
     return res.status(401).json({ error: 'Authentication required to stream recording artifacts.' });
   }
 
-  // Employees can only view their own recordings; Founders can view all
+  const rawFilename = req.params.filename;
+  if (rawFilename.includes('/') || rawFilename.includes('\\') || rawFilename.includes('..')) {
+    return res.status(400).json({ error: 'Invalid recording filename or path traversal detected.' });
+  }
+
+  const safeFilename = path.basename(rawFilename); // Prevent path traversal (../)
+  if (!/^[a-zA-Z0-9_.-]+$/.test(safeFilename)) {
+    return res.status(400).json({ error: 'Invalid recording filename format.' });
+  }
+  const filePath = path.join(recordingsDir, safeFilename);
+
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: 'Recording file not found.' });
+  }
+
+  // Strict Fail-Closed Authorization: Employees can only view their own recordings; Founders can view all
   if (user.role !== 'founder') {
     const audit = db.prepare('SELECT user_id FROM sprint_audits WHERE video_filename = ? OR video_url LIKE ?').get(safeFilename, `%${safeFilename}`);
-    if (audit && audit.user_id !== user.id) {
+    const matchesUserPrefix = safeFilename.startsWith(`sprint_${user.id}_`) || safeFilename.startsWith(`desktop_sprint_${user.id}_`);
+    if ((audit && audit.user_id !== user.id) || (!audit && !matchesUserPrefix)) {
       return res.status(403).json({ error: 'Access denied: You are not authorized to view this employee recording.' });
     }
   }
@@ -195,19 +238,23 @@ app.get('/recordings/:filename', (req, res) => {
 const server = createServer(app);
 const wss = new WebSocketServer({ server });
 
-// Secure WebSocket broadcasting helper with role-based filtering
+// Secure WebSocket broadcasting helper with role-based and user-level isolation
 function broadcast(eventType, data, options = {}) {
   const payload = JSON.stringify({ type: eventType, data, timestamp: Date.now() });
   const { founderOnly = false, recipientUserId = null } = options;
 
   wss.clients.forEach(client => {
     if (client.readyState === WebSocket.OPEN) {
-      // Role filtering
-      if (founderOnly && client.user?.role !== 'founder') {
+      // Never broadcast to unauthenticated sockets
+      if (!client.user) {
         return;
       }
-      // Specific employee filtering
-      if (recipientUserId && client.user?.role !== 'founder' && client.user?.id !== recipientUserId) {
+      // Role filtering for founder-only channels
+      if (founderOnly && client.user.role !== 'founder') {
+        return;
+      }
+      // Specific employee filtering (Founders receive or authorized recipient only)
+      if (recipientUserId && client.user.role !== 'founder' && client.user.id !== recipientUserId) {
         return;
       }
       client.send(payload);
@@ -215,32 +262,76 @@ function broadcast(eventType, data, options = {}) {
   });
 }
 
-// Authenticated WebSocket connection handler
+// Authenticated WebSocket connection handler (Strict authentication enforcement)
 wss.on('connection', (ws, req) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-    const token = url.searchParams.get('token');
+    let token = url.searchParams.get('token');
+
+    // Also support Sec-WebSocket-Protocol token extraction
+    if (!token && req.headers['sec-websocket-protocol']) {
+      const protocols = req.headers['sec-websocket-protocol'].split(',').map(s => s.trim());
+      token = protocols.find(p => p.startsWith('invx_')) || null;
+    }
+
+    if (!token && req.headers['authorization']) {
+      token = req.headers['authorization'].replace('Bearer ', '').trim();
+    }
+
     const user = validateSessionToken(token);
 
-    if (user) {
-      ws.user = user;
+    if (!user) {
       ws.send(JSON.stringify({ 
-        type: 'CONNECTED', 
-        message: `Antigravity Telemetry Socket Active. Authenticated as ${user.name} (${user.role.toUpperCase()})`,
-        user: { id: user.id, name: user.name, role: user.role },
-        timestamp: Date.now() 
+        type: 'ERROR', 
+        error: 'Unauthorized: Valid session token required for real-time telemetry stream.' 
       }));
-    } else {
-      // Allow unauthenticated connection only in dev/demo mode, but tag as unauthenticated
-      ws.user = null;
-      ws.send(JSON.stringify({ 
-        type: 'CONNECTED', 
-        message: 'Telemetry Socket Connected in Limited Mode (Unauthenticated)', 
-        timestamp: Date.now() 
-      }));
+      ws.close(1008, 'Unauthorized: Valid session required');
+      return;
     }
+
+    ws.user = user;
+    ws.isAlive = true;
+
+    ws.send(JSON.stringify({ 
+      type: 'CONNECTED', 
+      message: `Antigravity Telemetry Socket Active. Authenticated as ${user.name} (${user.role.toUpperCase()})`,
+      user: { id: user.id, name: user.name, role: user.role },
+      timestamp: Date.now() 
+    }));
+
+    // Message validation & heartbeat handler (max 64KB, malformed JSON safe)
+    ws.on('message', (rawData) => {
+      try {
+        if (rawData.length > 65536) {
+          ws.send(JSON.stringify({ type: 'ERROR', error: 'Message payload exceeds 64KB limit.' }));
+          return;
+        }
+
+        const msg = JSON.parse(rawData.toString());
+        if (!msg || typeof msg !== 'object') return;
+
+        if (msg.type === 'PING') {
+          ws.send(JSON.stringify({ type: 'PONG', timestamp: Date.now() }));
+        } else if (msg.type === 'AUTH') {
+          const reauthUser = validateSessionToken(msg.token);
+          if (reauthUser) {
+            ws.user = reauthUser;
+            ws.send(JSON.stringify({ type: 'REAUTHENTICATED', user: { id: reauthUser.id, name: reauthUser.name, role: reauthUser.role } }));
+          } else {
+            ws.send(JSON.stringify({ type: 'ERROR', error: 'Session expired' }));
+            ws.close(1008, 'Session expired');
+          }
+        }
+      } catch (err) {
+        ws.send(JSON.stringify({ type: 'ERROR', error: 'Malformed message format.' }));
+      }
+    });
+
+    ws.on('error', () => {});
   } catch (err) {
-    ws.send(JSON.stringify({ type: 'CONNECTED', message: 'Socket Active', timestamp: Date.now() }));
+    try {
+      ws.close(1008, 'Connection authentication failure');
+    } catch (e) {}
   }
 });
 
@@ -263,7 +354,7 @@ function autoCheckDeadlines() {
           status: 'failed',
           assigned_to: t.assigned_to,
           reason: 'Time limit exceeded without completion (Auto-marked as Task Failed)'
-        });
+        }, { recipientUserId: t.assigned_to });
       }
     }
   } catch (e) {
@@ -274,23 +365,8 @@ function autoCheckDeadlines() {
 // -------------------------------------------------------------
 // 1. HEALTH AND NETWORK DISCOVERY ENDPOINTS
 // -------------------------------------------------------------
-app.get('/api/health', (req, res) => {
-  try {
-    const userCount = db.prepare('SELECT COUNT(*) as count FROM users').get().count;
-    const taskCount = db.prepare('SELECT COUNT(*) as count FROM tasks').get().count;
-    res.json({
-      status: 'healthy',
-      timestamp: Date.now(),
-      service: 'Inovex Operations Sentinel',
-      nodeEnv: process.env.NODE_ENV || 'production',
-      metrics: { userCount, taskCount }
-    });
-  } catch (err) {
-    res.status(500).json({ status: 'unhealthy', error: err.message });
-  }
-});
-
-app.get('/api/system/network-info', (req, res) => {
+// Protected Network Discovery (Authenticated internal infrastructure inspection)
+app.get('/api/system/network-info', requireAuth, (req, res) => {
   try {
     const nets = os.networkInterfaces();
     const addresses = [];
@@ -711,36 +787,44 @@ app.post('/api/users/register', authLimiter, (req, res) => {
   }
 });
 
-// User Directory: Returns sanitized node directory (never passwords or salts)
-app.get('/api/users', (req, res) => {
+// User Directory: Authenticated roster with strict role-based field privacy
+app.get('/api/users', requireAuth, (req, res) => {
   try {
-    const authHeader = req.headers['authorization'] || req.headers['x-session-token'];
-    let isFounderUser = false;
-    if (authHeader) {
-      const token = authHeader.replace('Bearer ', '').trim();
-      const user = validateSessionToken(token);
-      if (user) {
-        if (user.role === 'founder') isFounderUser = true;
-        try {
-          db.prepare('UPDATE users SET last_seen_at = ? WHERE id = ?').run(Date.now(), user.id);
-        } catch (e) {}
-      }
-    }
+    const isFounderUser = req.user.role === 'founder';
+    const actingUserId = req.user.id;
 
     // Return sanitized directory with profile metadata (NEVER passwords)
     const selectFields = `id, name, role, email, skill_set, device_mac_address, is_active, last_seen_at, created_at, avatar_url, bio, phone, timezone, language, theme, time_format, notification_preferences`;
     const users = db.prepare(`SELECT ${selectFields} FROM users ORDER BY role DESC, id ASC`).all();
 
     const formattedUsers = users.map(u => {
+      const isSelf = u.id === actingUserId;
       let notifPrefs = null;
       try {
         if (u.notification_preferences) {
           notifPrefs = typeof u.notification_preferences === 'string' ? JSON.parse(u.notification_preferences) : u.notification_preferences;
         }
       } catch (e) {}
+
+      // If founder or viewing own identity record: return complete profile metadata
+      if (isFounderUser || isSelf) {
+        return {
+          ...u,
+          notification_preferences: notifPrefs
+        };
+      }
+
+      // If peer employee: sanitize private personal data (hide MAC, phone, email, notifications)
       return {
-        ...u,
-        notification_preferences: notifPrefs
+        id: u.id,
+        name: u.name,
+        role: u.role,
+        skill_set: u.skill_set,
+        avatar_url: u.avatar_url,
+        bio: u.bio,
+        timezone: u.timezone,
+        is_active: u.is_active,
+        created_at: u.created_at
       };
     });
 
@@ -767,7 +851,11 @@ app.put('/api/users/profile', requireAuth, (req, res) => {
       targetUserId
     } = req.body;
 
-    // Only founders can update other profiles; normal employees can only update their own
+    // Strict Authorization: Employees can ONLY update their own profile; Founders can update any
+    if (targetUserId && String(targetUserId).trim() !== actingUser.id && actingUser.role !== 'founder') {
+      return res.status(403).json({ error: 'Permission denied: Employees cannot modify other user profiles.' });
+    }
+
     const userIdToUpdate = (actingUser.role === 'founder' && targetUserId) ? String(targetUserId).trim() : actingUser.id;
 
     const targetUser = db.prepare('SELECT * FROM users WHERE id = ?').get(userIdToUpdate);
@@ -827,7 +915,7 @@ app.put('/api/users/profile', requireAuth, (req, res) => {
       notification_preferences: notifPrefs
     };
 
-    broadcast('USER_UPDATED', { user: sanitizedUser });
+    broadcast('USER_UPDATED', { user: sanitizedUser }, { recipientUserId: userIdToUpdate });
 
     res.json({
       success: true,
@@ -900,8 +988,7 @@ app.post('/api/users/avatar', requireAuth, (req, res) => {
 
     const avatarUrl = `/api/avatars/${filename}`;
     db.prepare('UPDATE users SET avatar_url = ? WHERE id = ?').run(avatarUrl, req.user.id);
-
-    broadcast('USER_UPDATED', { user: { id: req.user.id, avatar_url: avatarUrl } });
+    broadcast('USER_UPDATED', { user: { id: req.user.id, avatar_url: avatarUrl } }, { recipientUserId: req.user.id });
 
     res.json({
       success: true,
@@ -964,6 +1051,103 @@ app.post('/api/users/delete-account', requireAuth, (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ error: err.message || 'Server error during account deletion.' });
+  }
+});
+
+// Administrative Node Deletion (Executive Founder Privileges Required)
+app.delete('/api/users/:id', requireAuth, requireFounder, (req, res) => {
+  const targetUserId = req.params.id;
+  try {
+    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(targetUserId);
+    if (!user) {
+      return res.status(404).json({ error: 'User node not found in registry.' });
+    }
+
+    // Role Rule: Cannot delete the last remaining founder
+    if (user.role === 'founder') {
+      const founderCount = db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'founder' AND is_active = 1").get().count;
+      if (founderCount <= 1) {
+        return res.status(403).json({ 
+          error: 'Forbidden: Cannot delete the sole remaining Executive Founder on this node.' 
+        });
+      }
+    }
+
+    // Enterprise Data Retention: Reassign tasks to caller founder
+    db.prepare('UPDATE tasks SET assigned_to = ? WHERE assigned_to = ?').run(req.user.id, user.id);
+
+    // Revoke all active sessions
+    db.prepare('DELETE FROM sessions WHERE user_id = ?').run(user.id);
+
+    // Delete user from registry
+    db.prepare('DELETE FROM users WHERE id = ?').run(user.id);
+
+    broadcast('USER_DELETED', { userId: user.id, name: user.name });
+
+    res.json({
+      success: true,
+      message: `User node "${user.name}" (${user.role.toUpperCase()}) successfully removed by Administrator.`
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Server error during node deletion.' });
+  }
+});
+
+// Administrative User Node Provisioning / Invite Endpoint (Founder-Only)
+app.post('/api/admin/users/invite', requireAuth, requireFounder, (req, res) => {
+  const { name, email, role, skill_set, device_mac_address } = req.body;
+  try {
+    if (!email || !String(email).trim()) {
+      return res.status(400).json({ error: 'Valid email address is required to invite a user node.' });
+    }
+    const cleanEmail = String(email).trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      return res.status(400).json({ error: 'Please enter a valid email address format.' });
+    }
+
+    // Check if account already exists
+    const existing = db.prepare('SELECT id FROM users WHERE LOWER(email) = ?').get(cleanEmail);
+    if (existing) {
+      return res.status(409).json({ error: 'An account with this email address already exists.' });
+    }
+
+    const assignedRole = (role && String(role).trim().toLowerCase() === 'founder') ? 'founder' : 'employee';
+    const userId = (assignedRole === 'founder' ? 'usr_fnd_' : 'usr_emp_') + Date.now().toString(36) + '_' + crypto.randomBytes(4).toString('hex');
+    const cleanMac = (device_mac_address && String(device_mac_address).trim()) || 'A4:C1:38:9B:21:40';
+    const cleanName = (name && String(name).trim()) || (assignedRole === 'founder' ? 'Executive Founder' : 'Engineering Operator');
+    const cleanSkill = (skill_set && String(skill_set).trim()) || 'Engineering Operations';
+
+    // Generate secure temporary password hash
+    const tempPassword = crypto.randomBytes(16).toString('hex');
+    const salt = generateSalt();
+    const hash = hashPassword(tempPassword, salt);
+    const now = Date.now();
+
+    db.prepare(`
+      INSERT INTO users (id, name, role, device_mac_address, is_active, email, password_hash, password_salt, skill_set, last_seen_at, created_at)
+      VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
+    `).run(userId, cleanName, assignedRole, cleanMac, cleanEmail, hash, salt, cleanSkill, now, now);
+
+    const sanitizedUser = {
+      id: userId,
+      name: cleanName,
+      role: assignedRole,
+      email: cleanEmail,
+      skill_set: cleanSkill,
+      device_mac_address: cleanMac,
+      is_active: 1,
+      last_seen_at: now
+    };
+
+    broadcast('NODE_REGISTERED', { user: sanitizedUser });
+
+    res.status(201).json({
+      success: true,
+      message: `Node "${cleanName}" (${assignedRole.toUpperCase()}) invited successfully.`,
+      user: sanitizedUser
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Error inviting user node.' });
   }
 });
 
@@ -1271,7 +1455,7 @@ app.post('/api/tasks/status', requireAuth, (req, res) => {
       completed_at: isCompleted ? now : null,
       task: updatedTask,
       message: `Task "${updatedTask?.title}" updated to status: ${mappedStatus.toUpperCase()}.`
-    });
+    }, { recipientUserId: task.assigned_to });
 
     res.json({ success: true, task: updatedTask });
   } catch (err) {
@@ -1346,6 +1530,9 @@ app.get('/api/employee/dashboard', requireAuth, (req, res) => {
 // Start 90-Minute Fixed Sprint & Screen Tracking (Employee Only)
 app.post('/api/workspace/start-sprint', requireAuth, (req, res) => {
   const { taskId, userId } = req.body;
+  if (userId && String(userId).trim() !== req.user.id && req.user.role !== 'founder') {
+    return res.status(403).json({ error: 'Access denied: Employees cannot start sprints for other users.' });
+  }
   const effectiveUserId = req.user.role === 'founder' ? (userId || req.user.id) : req.user.id;
 
   try {
@@ -1388,7 +1575,7 @@ app.post('/api/workspace/start-sprint', requireAuth, (req, res) => {
       sprint_started_at: now,
       screen_tracking_active: 1,
       message: `Employee ${req.user.name} initiated 90-Minute sprint. Screen tracking and AI agent monitoring active.`
-    });
+    }, { recipientUserId: effectiveUserId });
 
     res.json({ success: true, task: updatedTask });
   } catch (err) {
@@ -1399,14 +1586,24 @@ app.post('/api/workspace/start-sprint', requireAuth, (req, res) => {
 // Backward-compatible alias
 app.post('/api/workspace/acknowledge', requireAuth, (req, res) => {
   const { taskId } = req.body;
+  if (!taskId) return res.status(400).json({ error: 'taskId is required.' });
+
+  const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+  if (!task) {
+    return res.status(404).json({ error: 'Task not found.' });
+  }
+  if (req.user.role !== 'founder' && task.assigned_to !== req.user.id) {
+    return res.status(403).json({ error: 'Access denied: You can only acknowledge tasks assigned to you.' });
+  }
+
   const now = Date.now();
   db.prepare(`
     UPDATE tasks 
     SET is_acknowledged = 1, status = 'active', sprint_started_at = ?, screen_tracking_active = 1, warning_count = 0, session_terminated = 0
-    WHERE id = ? AND assigned_to = ?
-  `).run(now, taskId, req.user.id);
+    WHERE id = ?
+  `).run(now, taskId);
   const updatedTask = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
-  broadcast('SPRINT_STARTED', { taskId, userId: req.user.id, sprint_started_at: now, screen_tracking_active: 1 });
+  broadcast('SPRINT_STARTED', { taskId, userId: task.assigned_to, sprint_started_at: now, screen_tracking_active: 1 }, { recipientUserId: task.assigned_to });
   res.json({ success: true, task: updatedTask });
 });
 
@@ -1492,7 +1689,7 @@ app.post('/api/workspace/ai-activity-check', requireAuth, (req, res) => {
           timestamp: now
         };
 
-        broadcast('SESSION_TERMINATED', terminationPayload);
+        broadcast('SESSION_TERMINATED', terminationPayload, { recipientUserId: userId });
         return res.json({ success: true, warningCount: 3, terminated: true, termination: terminationPayload });
       }
     }
@@ -1506,21 +1703,30 @@ app.post('/api/workspace/ai-activity-check', requireAuth, (req, res) => {
 // 90-minute Timer Reaches 00:00 -> Automatically turn off timer and tracking, advance to 'review'
 app.post('/api/workspace/timer-complete', requireAuth, (req, res) => {
   const { taskId } = req.body;
+  if (!taskId) return res.status(400).json({ error: 'taskId is required.' });
   const userId = req.user.id;
 
   try {
+    const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+    if (!task) {
+      return res.status(404).json({ error: 'Task not found.' });
+    }
+    if (req.user.role !== 'founder' && task.assigned_to !== userId) {
+      return res.status(403).json({ error: 'Access denied: You can only complete sprints for tasks assigned to you.' });
+    }
+
     db.prepare(`
       UPDATE tasks 
       SET screen_tracking_active = 0,
           status = 'review'
-      WHERE id = ? AND assigned_to = ?
-    `).run(taskId, userId);
+      WHERE id = ?
+    `).run(taskId);
 
     broadcast('TIMER_COMPLETED', {
       taskId,
-      userId,
+      userId: task.assigned_to,
       message: '90-minute burst completed. Timer and screen tracking stopped. Work submission pending.'
-    });
+    }, { recipientUserId: task.assigned_to });
 
     res.json({ success: true, completed: true });
   } catch (err) {
@@ -1562,7 +1768,7 @@ app.post('/api/workspace/submit-pow', requireAuth, (req, res) => {
       userId,
       task: updatedTask,
       message: `Proof-of-work submitted by ${req.user.name}. Awaiting Founder review.`
-    });
+    }, { recipientUserId: userId });
 
     res.json({
       success: true,
@@ -1590,7 +1796,7 @@ app.post('/api/workspace/lockout', requireAuth, (req, res) => {
       taskId,
       userId,
       message: `CRITICAL: 90-minute Checkpoint Timer expired without submission! Employee UI Locked.`
-    });
+    }, { recipientUserId: userId });
 
     res.json({ success: true, locked: true });
   } catch (err) {
@@ -1618,7 +1824,18 @@ app.post('/api/recordings/upload', requireAuth, uploadLimiter, upload.single('vi
     const userId = req.user.id;
     const filename = file.filename;
 
-    const task = taskId ? db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId) : null;
+    let task = null;
+    if (taskId) {
+      task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+      if (!task) {
+        try { fs.unlinkSync(file.path); } catch (e) {}
+        return res.status(404).json({ error: 'Referenced task not found.' });
+      }
+      if (req.user.role !== 'founder' && task.assigned_to !== userId) {
+        try { fs.unlinkSync(file.path); } catch (e) {}
+        return res.status(403).json({ error: 'Access denied: You cannot upload recordings for tasks assigned to other employees.' });
+      }
+    }
     const auditId = 'aud_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
     const videoUrl = `/recordings/${filename}`;
     const duration = parseInt(durationSeconds, 10) || 5400; // 90 mins (5400s) default
@@ -1742,7 +1959,7 @@ app.post('/api/recordings/upload', requireAuth, uploadLimiter, upload.single('vi
         focusBreakdown
       },
       message: `AI Agent completed 90-min video audit for ${req.user.name} (${devType.toUpperCase()}). Verdict: ${verdict}`
-    });
+    }, { recipientUserId: req.user.id });
 
     res.json({
       success: true,
@@ -1860,7 +2077,7 @@ app.post('/api/telemetry/log', requireAuth, (req, res) => {
         alertMessage: `Anomalous hardware signature or virtual input driver detected on ${req.user.name} (${req.user.device_mac_address}). Window: "${activeWindow}".`
       }, { founderOnly: true });
     } else {
-      broadcast('TELEMETRY_UPDATE', logEntry);
+      broadcast('TELEMETRY_UPDATE', logEntry, { recipientUserId: userId });
     }
 
     res.json({ success: true, log: logEntry });

@@ -19,8 +19,8 @@ import {
 import { registerUser, bootstrapFounder, loginUser, setupUserPassword, generateMacAddress } from '../lib/dataService';
 
 export function LoginGateway({ users = [], onLogin }) {
-  const [authMode, setAuthMode] = useState(users.length === 0 ? 'register' : 'signin');
-  const [selectedRole, setSelectedRole] = useState(users.length === 0 ? 'founder' : 'employee');
+  const [authMode, setAuthMode] = useState('signin');
+  const [selectedRole, setSelectedRole] = useState('employee');
   
   // Sign-in state
   const [email, setEmail] = useState('');

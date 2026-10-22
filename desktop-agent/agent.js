@@ -201,8 +201,17 @@ async function main() {
 
   // 2. Authenticate node
   if (!authToken) {
-    const defaultPassword = process.env.INOVEX_PASSWORD || '1042';
-    const enteredPass = await promptQuestion(`Enter password for ${selectedUser.name} [Default: ${defaultPassword}]: `) || defaultPassword;
+    const envPassword = process.env.INOVEX_PASSWORD || '';
+    let enteredPass = envPassword;
+    if (!enteredPass) {
+      enteredPass = await promptQuestion(`Enter password for ${selectedUser.name}: `);
+    }
+
+    if (!enteredPass || !enteredPass.trim()) {
+      console.log('\x1b[31mAuthentication Error: Password is required to authenticate desktop node.\x1b[0m');
+      rl.close();
+      process.exit(1);
+    }
 
     try {
       console.log('\nAuthenticating node with server...');

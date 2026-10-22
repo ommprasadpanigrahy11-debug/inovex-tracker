@@ -31,8 +31,11 @@
  */
 
 import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
 import crypto from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
+import WebSocket from 'ws';
 import db, { syncDefaultUsersWithHashes, syncBootstrapStatus, canSeedDemoData, dataDir, dbPath } from './db.js';
 import { 
   generateSalt,
@@ -108,14 +111,14 @@ async function runAllTests() {
   console.log('  INOVEX TRACKER — SECURITY, RBAC & DEPLOYMENT TESTS');
   console.log('======================================================\n');
 
-  // Dynamic import of app
-  const { app } = await import('./server.js');
+  // Dynamic import of app and server
+  const { app, server } = await import('./server.js');
 
-  // Start temporary test HTTP server on ephemeral port (port 0)
-  const testServer = http.createServer(app);
-  await new Promise((resolve) => testServer.listen(0, '127.0.0.1', resolve));
-  const testPort = testServer.address().port;
+  // Start HTTP and WebSocket test server on ephemeral port (port 0)
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const testPort = server.address().port;
   const baseUrl = `http://127.0.0.1:${testPort}`;
+  const wsUrl = `ws://127.0.0.1:${testPort}`;
 
   try {
     // ---------------------------------------------------------------------------
@@ -134,11 +137,11 @@ async function runAllTests() {
     assert(typeof healthData.uptimeSeconds === 'number', '/api/health reports server uptime');
     assert(!healthData.INITIAL_FOUNDER_KEY && !healthData.dbPath && !healthData.env, '/api/health strictly omits secrets, db paths, and environment dumps');
 
-    // 1.3 Core API routes are registered
-    const usersRes = await fetch(`${baseUrl}/api/users`);
-    assert(usersRes.status === 200, 'Existing /api/users endpoint is registered and responds with HTTP 200');
-    const usersJson = await usersRes.json();
-    assert(Array.isArray(usersJson), '/api/users returns JSON array');
+    // 1.3 Core API routes are registered and protected
+    const unauthUsersRes = await fetch(`${baseUrl}/api/users`);
+    assert(unauthUsersRes.status === 401, 'Unauthenticated /api/users request is rejected with HTTP 401');
+    const unauthUsersJson = await unauthUsersRes.json();
+    assert(unauthUsersJson.error && unauthUsersJson.error.includes('Authentication required'), 'Rejection payload includes clear authorization error');
 
     // 1.4 Unknown API routes return JSON 404, never frontend HTML
     const unknownRes = await fetch(`${baseUrl}/api/nonexistent-route-endpoint`);
@@ -596,9 +599,331 @@ async function runAllTests() {
     });
     assert(bootstrapCheckAfterDelete.status === 409, 'RULE 4.8 VERIFIED: Deleting founder does not silently reopen public founder bootstrap');
 
+    // ---------------------------------------------------------------------------
+    // SECTION 4: Comprehensive Phase 2 Security, Authorization & Isolation Tests
+    // ---------------------------------------------------------------------------
+    console.log('\n[SECTION 4] Testing Phase 2 Security, RBAC & Isolation Hardening...');
+
+    // Setup: Establish verified sessions for 2 independent employees and 1 founder
+    const empASession = createSession('usr_emp_01');
+    const empAToken = empASession.token;
+    const empBSession = createSession('usr_emp_02');
+    const empBToken = empBSession.token;
+    const founderUser = db.prepare("SELECT id FROM users WHERE role = 'founder' LIMIT 1").get();
+    const founderSession = createSession(founderUser.id);
+    const founderToken = founderSession.token;
+
+    // 4.1 Reject unauthenticated access to private endpoints (Fail-Closed)
+    console.log('\n  [4.1] Unauthenticated Fail-Closed Protection...');
+    const unauthEndpoints = [
+      { url: `${baseUrl}/api/system/network-info`, method: 'GET', name: '/api/system/network-info' },
+      { url: `${baseUrl}/api/users/profile`, method: 'PUT', body: {}, name: '/api/users/profile' },
+      { url: `${baseUrl}/api/tasks/assign`, method: 'POST', body: {}, name: '/api/tasks/assign' },
+      { url: `${baseUrl}/api/tasks/status`, method: 'POST', body: {}, name: '/api/tasks/status' },
+      { url: `${baseUrl}/api/workspace/start-sprint`, method: 'POST', body: {}, name: '/api/workspace/start-sprint' },
+      { url: `${baseUrl}/api/workspace/submit-pow`, method: 'POST', body: {}, name: '/api/workspace/submit-pow' },
+      { url: `${baseUrl}/api/telemetry/log`, method: 'POST', body: {}, name: '/api/telemetry/log' },
+      { url: `${baseUrl}/api/admin/users/invite`, method: 'POST', body: {}, name: '/api/admin/users/invite' },
+      { url: `${baseUrl}/api/admin/sprint-audits/usr_emp_01`, method: 'GET', name: '/api/admin/sprint-audits/:userId' },
+      { url: `${baseUrl}/recordings/sample_video.webm`, method: 'GET', name: '/recordings/:filename' }
+    ];
+
+    for (const ep of unauthEndpoints) {
+      const opts = { method: ep.method };
+      if (ep.body) {
+        opts.headers = { 'Content-Type': 'application/json' };
+        opts.body = JSON.stringify(ep.body);
+      }
+      const res = await fetch(ep.url, opts);
+      assert(res.status === 401, `Unauthenticated request to ${ep.name} returns HTTP 401 Unauthorized`);
+    }
+
+    // 4.2 Cross-User Resource Isolation (Employees cannot access/alter peer resources)
+    console.log('\n  [4.2] Cross-User Resource & Data Isolation...');
+    const isolationTaskId = 'tsk_iso_' + Date.now();
+    db.prepare(`
+      INSERT INTO tasks (
+        id, assigned_to, title, description, brief_content, status, 
+        ai_health_score, proof_of_work_webhook, checkpoint_timer, 
+        sprint_started_at, is_acknowledged, deadline, created_at
+      ) VALUES (?, 'usr_emp_01', 'Confidential Task For Emp A', 'Secret specs', 'Brief', 'pending', 95, 'https://hook', 5400, NULL, 0, NULL, ?)
+    `).run(isolationTaskId, Date.now());
+
+    // 4.2a Cross-user sprint start rejection
+    const empBStartA = await fetch(`${baseUrl}/api/workspace/start-sprint`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${empBToken}` },
+      body: JSON.stringify({ taskId: isolationTaskId, userId: 'usr_emp_01' })
+    });
+    assert(empBStartA.status === 403, 'Employee B cannot initiate sprint on Employee A assigned task (HTTP 403)');
+
+    // 4.2b Cross-user task acknowledge rejection
+    const empBAckA = await fetch(`${baseUrl}/api/workspace/acknowledge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${empBToken}` },
+      body: JSON.stringify({ taskId: isolationTaskId })
+    });
+    assert(empBAckA.status === 403, 'Employee B cannot acknowledge Employee A assigned task (HTTP 403)');
+
+    // 4.2c Cross-user task status update rejection
+    const empBUpdateStatusA = await fetch(`${baseUrl}/api/tasks/status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${empBToken}` },
+      body: JSON.stringify({ taskId: isolationTaskId, status: 'review' })
+    });
+    assert(empBUpdateStatusA.status === 403, 'Employee B cannot update task status for Employee A assigned task (HTTP 403)');
+
+    // 4.2d Cross-user sprint audit inspection rejection
+    const empBAuditA = await fetch(`${baseUrl}/api/admin/sprint-audits/usr_emp_01`, {
+      headers: { 'Authorization': `Bearer ${empBToken}` }
+    });
+    assert(empBAuditA.status === 403, 'Employee B cannot view sprint audit records of Employee A (HTTP 403)');
+
+    const empAAuditA = await fetch(`${baseUrl}/api/admin/sprint-audits/usr_emp_01`, {
+      headers: { 'Authorization': `Bearer ${empAToken}` }
+    });
+    assert(empAAuditA.status === 200, 'Employee A can view their own sprint audit records (HTTP 200)');
+
+    const founderAuditA = await fetch(`${baseUrl}/api/admin/sprint-audits/usr_emp_01`, {
+      headers: { 'Authorization': `Bearer ${founderToken}` }
+    });
+    assert(founderAuditA.status === 200, 'Founder can inspect sprint audit records of any employee (HTTP 200)');
+
+    // 4.2e Cross-user profile tampering prevention
+    const empAInDbBefore = db.prepare('SELECT name FROM users WHERE id = ?').get('usr_emp_01');
+    const empBTamperA = await fetch(`${baseUrl}/api/users/profile`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${empBToken}` },
+      body: JSON.stringify({ targetUserId: 'usr_emp_01', name: 'Tampered Hacker Name' })
+    });
+    assert(empBTamperA.status === 403, 'Employee B cannot modify Employee A profile via targetUserId (HTTP 403)');
+    const empAInDb = db.prepare('SELECT name FROM users WHERE id = ?').get('usr_emp_01');
+    assert(empAInDb.name === empAInDbBefore.name, 'Employee A name remained untampered in database');
+
+    // 4.3 Founder-Only Operations Protected by Explicit Role Checks
+    console.log('\n  [4.3] Founder Privilege Enforcement...');
+    const empAssignTask = await fetch(`${baseUrl}/api/tasks/assign`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${empAToken}` },
+      body: JSON.stringify({ title: 'Hostile Task', assignedUserId: 'usr_emp_02' })
+    });
+    assert(empAssignTask.status === 403, 'Employee cannot assign tasks via /api/tasks/assign (HTTP 403)');
+
+    const empInviteUser = await fetch(`${baseUrl}/api/admin/users/invite`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${empAToken}` },
+      body: JSON.stringify({ name: 'Infiltrator', email: 'infiltrator@lexven.com', role: 'employee' })
+    });
+    assert(empInviteUser.status === 403, 'Employee cannot invite users via /api/admin/users/invite (HTTP 403)');
+
+    const empDeleteUser = await fetch(`${baseUrl}/api/users/usr_emp_02`, {
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${empAToken}` }
+    });
+    assert(empDeleteUser.status === 403, 'Employee cannot delete user nodes via DELETE /api/users/:id (HTTP 403)');
+
+    const empVerifyTask = await fetch(`${baseUrl}/api/tasks/status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${empAToken}` },
+      body: JSON.stringify({ taskId: isolationTaskId, status: 'verified' })
+    });
+    assert(empVerifyTask.status === 403, 'Employee cannot verify/approve task deliverables (HTTP 403)');
+
+    // 4.4 Data Minimization & Sensitive Field Omission in /api/users
+    console.log('\n  [4.4] Employee Directory Data Minimization...');
+    const empUsersRes = await fetch(`${baseUrl}/api/users`, {
+      headers: { 'Authorization': `Bearer ${empAToken}` }
+    });
+    assert(empUsersRes.status === 200, 'Authenticated employee can query user roster');
+    const empUsersList = await empUsersRes.json();
+    assert(Array.isArray(empUsersList), 'User roster returns array');
+    const peerEmployeeRecord = empUsersList.find(u => u.id === 'usr_emp_02');
+    assert(peerEmployeeRecord !== undefined, 'Peer employee record present');
+    assert(!('device_mac_address' in peerEmployeeRecord), 'Peer employee record omits device_mac_address from employee view');
+    assert(!('phone' in peerEmployeeRecord), 'Peer employee record omits phone from employee view');
+    assert(!('notification_preferences' in peerEmployeeRecord), 'Peer employee record omits notification_preferences from employee view');
+    assert(!('password_hash' in peerEmployeeRecord) && !('password_salt' in peerEmployeeRecord), 'Peer record omits password hashes/salts');
+
+    const ownRecordInList = empUsersList.find(u => u.id === 'usr_emp_01');
+    assert('device_mac_address' in ownRecordInList, 'Employee can view their own device_mac_address');
+
+    const founderUsersRes = await fetch(`${baseUrl}/api/users`, {
+      headers: { 'Authorization': `Bearer ${founderToken}` }
+    });
+    const founderUsersList = await founderUsersRes.json();
+    const peerFromFounder = founderUsersList.find(u => u.id === 'usr_emp_02');
+    assert('device_mac_address' in peerFromFounder, 'Founder view retains device_mac_address for fleet telemetry management');
+
+    // 4.5 File Storage, Path Traversal & Fail-Closed Recording Authorization
+    console.log('\n  [4.5] File Storage Security & Path Traversal Prevention...');
+    // Setup test recording
+    const recFolder = path.join(dataDir, 'recordings');
+    if (!fs.existsSync(recFolder)) fs.mkdirSync(recFolder, { recursive: true });
+    const empARecordingName = `desktop_sprint_usr_emp_01_${Date.now()}.webm`;
+    fs.writeFileSync(path.join(recFolder, empARecordingName), Buffer.from('FAKE_WEBM_VIDEO_DATA_FOR_SECURITY_TEST'));
+
+    // 4.5a Fail-closed unauthorized streaming
+    const empBStreamA = await fetch(`${baseUrl}/recordings/${empARecordingName}`, {
+      headers: { 'Authorization': `Bearer ${empBToken}` }
+    });
+    assert(empBStreamA.status === 403, 'Employee B streaming Employee A recording is rejected with HTTP 403 (Fail-Closed)');
+
+    const empAStreamA = await fetch(`${baseUrl}/recordings/${empARecordingName}`, {
+      headers: { 'Authorization': `Bearer ${empAToken}` }
+    });
+    assert(empAStreamA.status === 200, 'Employee A successfully streams their own recording (HTTP 200)');
+
+    const founderStreamA = await fetch(`${baseUrl}/recordings/${empARecordingName}`, {
+      headers: { 'Authorization': `Bearer ${founderToken}` }
+    });
+    assert(founderStreamA.status === 200, 'Founder successfully streams employee recording for review (HTTP 200)');
+
+    // 4.5b Path traversal attacks
+    const traversalRecording = await fetch(`${baseUrl}/recordings/..%2f..%2fpackage.json`, {
+      headers: { 'Authorization': `Bearer ${founderToken}` }
+    });
+    assert(traversalRecording.status === 400 || traversalRecording.status === 403, 'Path traversal on /recordings/..%2f is blocked (HTTP 400/403)');
+
+    const traversalAvatar = await fetch(`${baseUrl}/api/avatars/..%2f..%2fpackage.json`);
+    assert(traversalAvatar.status === 400, 'Path traversal on /api/avatars/..%2f is blocked with HTTP 400');
+
+    const invalidAvatarExt = await fetch(`${baseUrl}/api/avatars/payload.php`);
+    assert(invalidAvatarExt.status === 400, 'Disallowed avatar file extension is blocked with HTTP 400');
+
+    // 4.5c Recording upload task ownership verification
+    const uploadForm = new FormData();
+    uploadForm.append('taskId', isolationTaskId); // Belongs to usr_emp_01
+    uploadForm.append('userId', 'usr_emp_01');
+    uploadForm.append('video', new Blob([Buffer.alloc(1024, 0x1a)], { type: 'video/webm' }), 'test.webm');
+
+    const unauthorizedUpload = await fetch(`${baseUrl}/api/recordings/upload`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${empBToken}` },
+      body: uploadForm
+    });
+    assert(unauthorizedUpload.status === 403, 'Uploading recording for another employee task is rejected with HTTP 403');
+
+    // Clean up test file
+    try { fs.unlinkSync(path.join(recFolder, empARecordingName)); } catch (e) {}
+
+    // 4.6 WebSocket Authentication & Cross-User Event Isolation
+    console.log('\n  [4.6] WebSocket Authentication & Event Isolation...');
+
+    // 4.6a Unauthenticated connection rejection
+    const unauthWs = new WebSocket(wsUrl);
+    const unauthCloseCode = await new Promise((resolve) => {
+      unauthWs.on('close', (code) => resolve(code));
+      unauthWs.on('error', () => {});
+    });
+    assert(unauthCloseCode === 1008, 'WebSocket connection without credentials closes with code 1008 (Policy Violation)');
+
+    // 4.6b Invalid token rejection
+    const invalidWs = new WebSocket(`${wsUrl}?token=invx_bogus_fake_token_12345`);
+    const invalidCloseCode = await new Promise((resolve) => {
+      invalidWs.on('close', (code) => resolve(code));
+      invalidWs.on('error', () => {});
+    });
+    assert(invalidCloseCode === 1008, 'WebSocket connection with invalid token closes with code 1008');
+
+    // 4.6c Authenticated WebSocket connection & message size limits
+    const wsA = new WebSocket(`${wsUrl}?token=${empAToken}`);
+    const wsConnectedMsg = await new Promise((resolve) => {
+      wsA.on('message', (data) => {
+        const parsed = JSON.parse(data.toString());
+        if (parsed.type === 'CONNECTED') resolve(parsed);
+      });
+    });
+    assert(wsConnectedMsg && wsConnectedMsg.type === 'CONNECTED', 'WebSocket connects with valid token and receives CONNECTED frame');
+    assert(wsConnectedMsg.user.id === 'usr_emp_01', 'WebSocket connection bound to verified user identity');
+
+    // Message payload > 64KB rejection
+    const oversizedPayload = JSON.stringify({ type: 'PING', data: 'X'.repeat(70000) });
+    wsA.send(oversizedPayload);
+    const wsErrorMsg = await new Promise((resolve) => {
+      wsA.on('message', (data) => {
+        const parsed = JSON.parse(data.toString());
+        if (parsed.type === 'ERROR') resolve(parsed);
+      });
+    });
+    assert(wsErrorMsg && wsErrorMsg.error.includes('exceeds 64KB'), 'WebSocket rejects messages exceeding 64KB limit');
+
+    // 4.6d Cross-user event isolation verification
+    const connectAuthenticatedSocket = (token) => {
+      return new Promise((resolve, reject) => {
+        const ws = new WebSocket(`${wsUrl}?token=${token}`);
+        const timer = setTimeout(() => reject(new Error('WebSocket connection timeout')), 4000);
+        ws.once('message', (data) => {
+          clearTimeout(timer);
+          try {
+            const parsed = JSON.parse(data.toString());
+            resolve({ ws, connectedMsg: parsed });
+          } catch (e) {
+            resolve({ ws, connectedMsg: null });
+          }
+        });
+        ws.on('error', (err) => {
+          clearTimeout(timer);
+          reject(err);
+        });
+      });
+    };
+
+    const { ws: wsB } = await connectAuthenticatedSocket(empBToken);
+    const { ws: wsFounder } = await connectAuthenticatedSocket(founderToken);
+
+    // Listen for TELEMETRY_UPDATE on wsA, wsB, and wsFounder
+    let empAReceivedTelemetry = false;
+    let empBReceivedTelemetry = false;
+    let founderReceivedTelemetry = false;
+
+    wsA.on('message', (d) => {
+      try {
+        const p = JSON.parse(d.toString());
+        if (p.type === 'TELEMETRY_UPDATE' && p.data?.user_id === 'usr_emp_01') empAReceivedTelemetry = true;
+      } catch (e) {}
+    });
+
+    wsB.on('message', (d) => {
+      try {
+        const p = JSON.parse(d.toString());
+        if (p.type === 'TELEMETRY_UPDATE' && p.data?.user_id === 'usr_emp_01') empBReceivedTelemetry = true;
+      } catch (e) {}
+    });
+
+    wsFounder.on('message', (d) => {
+      try {
+        const p = JSON.parse(d.toString());
+        if (p.type === 'TELEMETRY_UPDATE' && p.data?.user_id === 'usr_emp_01') founderReceivedTelemetry = true;
+      } catch (e) {}
+    });
+
+    // Employee A posts telemetry log
+    await fetch(`${baseUrl}/api/telemetry/log`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${empAToken}` },
+      body: JSON.stringify({
+        taskId: isolationTaskId,
+        activeWindow: 'Code Editor - Antigravity',
+        keystrokeRate: 45.2,
+        hardwareSpoofFlag: 0
+      })
+    });
+
+    // Wait 300ms for WebSocket frames to propagate
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    assert(empAReceivedTelemetry === true, 'Employee A receives their own real-time telemetry stream event');
+    assert(founderReceivedTelemetry === true, 'Executive Founder receives employee telemetry stream event');
+    assert(empBReceivedTelemetry === false, 'RULE: Employee B does NOT receive Employee A telemetry (Cross-User Isolation Verified)');
+
+    // Close test sockets cleanly
+    wsA.close();
+    wsB.close();
+    wsFounder.close();
+
   } finally {
-    // Graceful teardown of HTTP test server
-    await new Promise((resolve) => testServer.close(resolve));
+    // Graceful teardown of HTTP and WebSocket test server
+    await new Promise((resolve) => server.close(resolve));
   }
 
   console.log('\n======================================================');
