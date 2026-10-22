@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import os from 'node:os';
 import multer from 'multer';
-import db from './db.js';
+import db, { dataDir } from './db.js';
 import { 
   hashPassword, 
   verifyPassword, 
@@ -28,11 +28,11 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const distPath = path.join(__dirname, '../dist');
 const publicPath = path.join(__dirname, '../public');
-const recordingsDir = path.join(__dirname, 'data/recordings');
+const recordingsDir = path.join(dataDir, 'recordings');
 if (!fs.existsSync(recordingsDir)) {
   fs.mkdirSync(recordingsDir, { recursive: true });
 }
-const avatarsDir = path.join(__dirname, 'data/avatars');
+const avatarsDir = path.join(dataDir, 'avatars');
 if (!fs.existsSync(avatarsDir)) {
   fs.mkdirSync(avatarsDir, { recursive: true });
 }
