@@ -7,13 +7,15 @@ import crypto from 'node:crypto';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const dbDir = path.join(__dirname, 'data');
-if (!fs.existsSync(dbDir)) {
-  fs.mkdirSync(dbDir, { recursive: true });
+const dataDir = process.env.DATA_DIR || path.join(__dirname, 'data');
+if (!fs.existsSync(dataDir)) {
+  fs.mkdirSync(dataDir, { recursive: true });
 }
 
-const dbPath = path.join(dbDir, 'antigravity.db');
+const dbPath = process.env.DB_PATH || path.join(dataDir, 'antigravity.db');
 const db = new DatabaseSync(dbPath);
+
+export { dataDir, dbPath };
 
 // Enable WAL mode & foreign keys for performance and data integrity
 db.exec('PRAGMA foreign_keys = ON;');
@@ -234,14 +236,36 @@ db.exec(`
 `);
 
 // 6. Security Bootstrap Table (Enforces persistent, atomic one-time initial founder registration)
+// NOTE: Must not cascade on delete so deleting a founder never reopens bootstrap
 db.exec(`
   CREATE TABLE IF NOT EXISTS security_bootstrap (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     completed_at INTEGER NOT NULL,
-    founder_user_id TEXT NOT NULL,
-    FOREIGN KEY (founder_user_id) REFERENCES users(id) ON DELETE CASCADE
+    founder_user_id TEXT NOT NULL
   );
 `);
+
+// Migration: Ensure existing security_bootstrap table does not cascade delete when users are deleted
+try {
+  const sbInfo = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='security_bootstrap'").get();
+  if (sbInfo && sbInfo.sql && (sbInfo.sql.includes('ON DELETE CASCADE') || sbInfo.sql.includes('REFERENCES users'))) {
+    db.exec(`
+      PRAGMA foreign_keys = OFF;
+      CREATE TABLE IF NOT EXISTS security_bootstrap_migrated (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        completed_at INTEGER NOT NULL,
+        founder_user_id TEXT NOT NULL
+      );
+      INSERT OR IGNORE INTO security_bootstrap_migrated (id, completed_at, founder_user_id)
+      SELECT id, completed_at, founder_user_id FROM security_bootstrap;
+      DROP TABLE security_bootstrap;
+      ALTER TABLE security_bootstrap_migrated RENAME TO security_bootstrap;
+      PRAGMA foreign_keys = ON;
+    `);
+  }
+} catch (e) {
+  console.warn('Migration note for security_bootstrap:', e?.message || e);
+}
 
 // Mark bootstrap as permanently completed if an active founder already exists in users table
 export function syncBootstrapStatus() {
@@ -293,11 +317,18 @@ export function syncSupabaseProductionUsers() {
 }
 syncSupabaseProductionUsers();
 
-// Automatic Seed if database has zero users
+// Helper to determine whether demo seeding is permitted: strictly disabled in production
+export function canSeedDemoData(env = process.env) {
+  const isProduction = env.NODE_ENV === 'production';
+  if (isProduction) return false;
+  return env.SEED_DEMO_DATA === 'true' || (env.NODE_ENV !== 'test' && env.SEED_DEMO_DATA !== 'false');
+}
+
+// Automatic Seed if database has zero users - strictly disabled in production
 const userCountStmt = db.prepare('SELECT COUNT(*) as count FROM users');
 const { count } = userCountStmt.get();
 
-if (count === 0 && process.env.SEED_DEMO_DATA !== 'false') {
+if (count === 0 && canSeedDemoData()) {
   const insertUser = db.prepare(`
     INSERT INTO users (id, name, role, device_mac_address, is_active, biometric_passkey_id, biometric_enrolled)
     VALUES (?, ?, ?, ?, ?, ?, 1)

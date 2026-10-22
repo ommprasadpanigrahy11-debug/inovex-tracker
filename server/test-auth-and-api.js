@@ -33,7 +33,7 @@
 import http from 'node:http';
 import crypto from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
-import db, { syncDefaultUsersWithHashes, syncBootstrapStatus } from './db.js';
+import db, { syncDefaultUsersWithHashes, syncBootstrapStatus, canSeedDemoData, dataDir, dbPath } from './db.js';
 import { 
   generateSalt,
   hashPassword, 
@@ -537,6 +537,64 @@ async function runAllTests() {
     assert(directoryUsers.length > 0, 'User directory roster retrieved');
     assert(!('password_hash' in directoryUsers[0]), 'Directory record strictly omits password_hash');
     assert(!('password_salt' in directoryUsers[0]), 'Directory record strictly omits password_salt');
+
+    // 3.1 Persistent disk storage configuration
+    assert(typeof dataDir === 'string' && dataDir.length > 0, 'dataDir is properly configured and exported');
+    assert(typeof dbPath === 'string' && dbPath.includes('antigravity.db'), 'dbPath is properly resolved to persistent SQLite database');
+
+    // 3.2 Production mode strictly blocks demo account seeding
+    assert(canSeedDemoData({ NODE_ENV: 'production' }) === false, 'RULE 3.6: Production mode does not seed demo accounts (default)');
+    assert(canSeedDemoData({ NODE_ENV: 'production', SEED_DEMO_DATA: 'true' }) === false, 'RULE 3.6: Production mode ignores SEED_DEMO_DATA=true');
+    assert(canSeedDemoData({ NODE_ENV: 'test' }) === false, 'Test mode does not auto-seed demo accounts by default');
+    assert(canSeedDemoData({ NODE_ENV: 'development', SEED_DEMO_DATA: 'true' }) === true, 'Development mode permits demo seeding when explicitly requested');
+
+    // 3.3 Deleting a founder does not silently reset bootstrap completion
+    const testBootstrapDb = new DatabaseSync(':memory:');
+    testBootstrapDb.exec('PRAGMA foreign_keys = ON;');
+    testBootstrapDb.exec(`
+      CREATE TABLE users (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        role TEXT NOT NULL,
+        device_mac_address TEXT NOT NULL DEFAULT '00:00:00:00:00:00',
+        is_active INTEGER DEFAULT 1,
+        email TEXT UNIQUE,
+        password_hash TEXT,
+        password_salt TEXT,
+        skill_set TEXT,
+        last_seen_at INTEGER,
+        created_at INTEGER
+      );
+      CREATE TABLE security_bootstrap (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        completed_at INTEGER NOT NULL,
+        founder_user_id TEXT NOT NULL
+      );
+    `);
+    testBootstrapDb.prepare("INSERT INTO users (id, name, role, email) VALUES ('usr_fnd_initial', 'Founder Zero', 'founder', 'zero@lexven.com')").run();
+    testBootstrapDb.prepare("INSERT INTO security_bootstrap (id, completed_at, founder_user_id) VALUES (1, ?, 'usr_fnd_initial')").run(Date.now());
+    
+    // Verify bootstrap record exists
+    let sbRecord = testBootstrapDb.prepare("SELECT * FROM security_bootstrap WHERE id = 1").get();
+    assert(sbRecord && sbRecord.founder_user_id === 'usr_fnd_initial', 'Bootstrap record initially populated');
+
+    // Delete the founder user
+    testBootstrapDb.prepare("DELETE FROM users WHERE id = 'usr_fnd_initial'").run();
+    const userExists = testBootstrapDb.prepare("SELECT id FROM users WHERE id = 'usr_fnd_initial'").get();
+    assert(!userExists, 'Founder user successfully deleted from users table');
+
+    // Crucial check: security_bootstrap record MUST STILL EXIST!
+    sbRecord = testBootstrapDb.prepare("SELECT * FROM security_bootstrap WHERE id = 1").get();
+    assert(sbRecord && sbRecord.id === 1, 'RULE 4.8 VERIFIED: Deleting founder user does NOT cascade-delete security_bootstrap record');
+
+    // Attempting bootstrap after user deletion must still be rejected
+    const bootstrapCheckAfterDelete = executeBootstrapTx(testBootstrapDb, {
+      name: 'Attacker Imposter',
+      email: 'attacker@evil.com',
+      password: 'HackerPassword#1',
+      bootstrapKey: TEST_BOOTSTRAP_SECRET
+    });
+    assert(bootstrapCheckAfterDelete.status === 409, 'RULE 4.8 VERIFIED: Deleting founder does not silently reopen public founder bootstrap');
 
   } finally {
     // Graceful teardown of HTTP test server

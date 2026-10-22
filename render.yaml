@@ -6,11 +6,17 @@ services:
     region: oregon
     buildCommand: npm install
     startCommand: node server/server.js
+    disk:
+      name: inovex-data
+      mountPath: /var/data
+      sizeGB: 10
     envVars:
       - key: NODE_ENV
         value: production
       - key: PORT
         value: 10000
+      - key: DATA_DIR
+        value: /var/data
       - key: ALLOWED_ORIGIN
         sync: false
       - key: INITIAL_FOUNDER_KEY
