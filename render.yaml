@@ -12,6 +12,6 @@ services:
       - key: PORT
         value: 10000
       - key: ALLOWED_ORIGIN
-        value: "*"
+        sync: false
       - key: INITIAL_FOUNDER_KEY
         generateValue: true

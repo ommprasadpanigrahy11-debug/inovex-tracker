@@ -16,7 +16,7 @@ import {
   Sparkles,
   Info
 } from 'lucide-react';
-import { registerUser, loginUser, generateMacAddress } from '../lib/dataService';
+import { registerUser, bootstrapFounder, loginUser, setupUserPassword, generateMacAddress } from '../lib/dataService';
 
 export function LoginGateway({ users = [], onLogin }) {
   const [authMode, setAuthMode] = useState(users.length === 0 ? 'register' : 'signin');
@@ -26,12 +26,19 @@ export function LoginGateway({ users = [], onLogin }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
 
+  // Setup password state (for unhashed accounts)
+  const [setupEmail, setSetupEmail] = useState('');
+  const [setupRole, setSetupRole] = useState('employee');
+  const [setupPassword, setSetupPassword] = useState('');
+  const [setupBootstrapKey, setSetupBootstrapKey] = useState('');
+
   // Register state
   const [regName, setRegName] = useState('');
   const [regEmail, setRegEmail] = useState('');
   const [regSkillSet, setRegSkillSet] = useState('');
   const [regMac, setRegMac] = useState(generateMacAddress());
   const [regPassword, setRegPassword] = useState('');
+  const [regBootstrapKey, setRegBootstrapKey] = useState('');
 
   const [isLoading, setIsLoading] = useState(false);
   const [authStep, setAuthStep] = useState('');
@@ -122,23 +129,36 @@ export function LoginGateway({ users = [], onLogin }) {
       setErrorMsg('Please create a secure password for this node.');
       return;
     }
-    if (pass.length < 4) {
-      setErrorMsg('Password must be at least 4 characters long.');
+    if (pass.length < 6) {
+      setErrorMsg('Password must be at least 6 characters long.');
+      return;
+    }
+    if (selectedRole === 'founder' && !regBootstrapKey.trim()) {
+      setErrorMsg('Founder Bootstrap Secret is required to register an Executive Founder account.');
       return;
     }
 
     setIsLoading(true);
-    setAuthStep('Registering node in verified security registry...');
+    setAuthStep(selectedRole === 'founder' ? 'Authorizing Founder bootstrap protocol...' : 'Registering node in verified security registry...');
 
     try {
-      const res = await registerUser({
-        name,
-        email: cleanEmail,
-        password: pass,
-        role: selectedRole,
-        skill_set: skillSet,
-        device_mac_address: mac
-      });
+      const res = selectedRole === 'founder'
+        ? await bootstrapFounder({
+            name,
+            email: cleanEmail,
+            password: pass,
+            skill_set: skillSet,
+            device_mac_address: mac,
+            bootstrapKey: regBootstrapKey.trim()
+          })
+        : await registerUser({
+            name,
+            email: cleanEmail,
+            password: pass,
+            role: 'employee',
+            skill_set: skillSet,
+            device_mac_address: mac
+          });
 
       if (res && res.success && res.user) {
         setAuthStep(`Node registered for ${res.user.name}. Initializing workspace...`);
@@ -415,13 +435,43 @@ export function LoginGateway({ users = [], onLogin }) {
                   required
                   className="dispatch-textarea"
                   style={{ height: '42px', padding: '10px 14px', resize: 'none' }}
-                  placeholder="Create secure account password (min. 4 chars)..."
+                  placeholder="Create secure account password (min. 6 chars)..."
                   value={regPassword}
                   onChange={(e) => setRegPassword(e.target.value)}
                   disabled={isLoading}
                   autoComplete="new-password"
                 />
               </div>
+
+              {/* Founder Bootstrap Key Required Field */}
+              {selectedRole === 'founder' && (
+                <div className="login-input-group">
+                  <label className="login-label" htmlFor="reg-bootstrap-input">
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                      <Key size={12} style={{ color: 'var(--accent)' }} />
+                      <span>Initial Founder Key (Bootstrap Secret)</span>
+                    </span>
+                    <span className="mono" style={{ fontSize: '10px', color: 'var(--accent-strong)' }}>
+                      Required
+                    </span>
+                  </label>
+                  <input
+                    type="password"
+                    id="reg-bootstrap-input"
+                    required
+                    className="dispatch-textarea"
+                    style={{ height: '42px', padding: '10px 14px', resize: 'none' }}
+                    placeholder="Enter deployment INITIAL_FOUNDER_KEY..."
+                    value={regBootstrapKey}
+                    onChange={(e) => setRegBootstrapKey(e.target.value)}
+                    disabled={isLoading}
+                    autoComplete="off"
+                  />
+                  <div style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '4px' }}>
+                    Secured by server-side verification against INITIAL_FOUNDER_KEY. Unauthenticated registration cannot create founder accounts without this authorization key.
+                  </div>
+                </div>
+              )}
 
               <div className="login-input-group">
                 <label className="login-label" htmlFor="reg-mac-input">

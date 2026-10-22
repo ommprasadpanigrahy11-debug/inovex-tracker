@@ -129,9 +129,12 @@ export async function uploadRecordingToSupabase(videoBlob, metadata) {
     headers['X-Session-Token'] = token;
   }
 
+  const apiBase = (import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
+  const uploadUrl = apiBase ? `${apiBase}/api/recordings/upload` : '/api/recordings/upload';
+
   // 1. Upload to Server Endpoint
   try {
-    const res = await fetch('/api/recordings/upload', {
+    const res = await fetch(uploadUrl, {
       method: 'POST',
       headers,
       body: formData

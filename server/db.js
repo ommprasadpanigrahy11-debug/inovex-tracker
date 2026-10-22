@@ -233,6 +233,66 @@ db.exec(`
   );
 `);
 
+// 6. Security Bootstrap Table (Enforces persistent, atomic one-time initial founder registration)
+db.exec(`
+  CREATE TABLE IF NOT EXISTS security_bootstrap (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    completed_at INTEGER NOT NULL,
+    founder_user_id TEXT NOT NULL,
+    FOREIGN KEY (founder_user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+`);
+
+// Mark bootstrap as permanently completed if an active founder already exists in users table
+export function syncBootstrapStatus() {
+  try {
+    const existingFounder = db.prepare("SELECT id, created_at FROM users WHERE role = 'founder' AND is_active = 1 ORDER BY created_at ASC LIMIT 1").get();
+    if (existingFounder) {
+      db.prepare("INSERT OR IGNORE INTO security_bootstrap (id, completed_at, founder_user_id) VALUES (1, ?, ?)").run(
+        existingFounder.created_at || Date.now(),
+        existingFounder.id
+      );
+    }
+  } catch (e) {}
+}
+syncBootstrapStatus();
+
+// Synchronize production users from Supabase or local backup so real accounts are preserved
+export function syncSupabaseProductionUsers() {
+  try {
+    let usersToSync = [];
+    const backupPath = path.join(__dirname, '../scratch/production_supabase_users_backup.json');
+    if (fs.existsSync(backupPath)) {
+      try {
+        usersToSync = JSON.parse(fs.readFileSync(backupPath, 'utf8'));
+      } catch (e) {}
+    }
+
+    if (Array.isArray(usersToSync) && usersToSync.length > 0) {
+      const insertOrIgnore = db.prepare(`
+        INSERT OR IGNORE INTO users (id, name, role, email, device_mac_address, is_active, created_at, skill_set)
+        VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+      `);
+      for (const u of usersToSync) {
+        if (!u || !u.id || !u.email) continue;
+        const cleanSkill = u.skill_set || (u.role === 'founder' ? 'Executive Director' : 'Engineering Operator');
+        insertOrIgnore.run(
+          u.id,
+          u.name || (u.role === 'founder' ? 'Executive Founder' : 'Engineering Operator'),
+          u.role,
+          u.email.toLowerCase(),
+          u.device_mac_address || '00:00:00:00:00:00',
+          u.created_at || Date.now(),
+          cleanSkill
+        );
+      }
+    }
+  } catch (err) {
+    console.warn('[Sync Production Users Note]', err?.message || err);
+  }
+}
+syncSupabaseProductionUsers();
+
 // Automatic Seed if database has zero users
 const userCountStmt = db.prepare('SELECT COUNT(*) as count FROM users');
 const { count } = userCountStmt.get();

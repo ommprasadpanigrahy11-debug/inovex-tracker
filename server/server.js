@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import { createServer } from 'node:http';
+import crypto from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,7 +19,9 @@ import {
   requireAuth, 
   requireFounder, 
   createRateLimiter, 
-  BOOTSTRAP_FOUNDER_KEY 
+  BOOTSTRAP_FOUNDER_KEY,
+  isBootstrapKeyValid,
+  isBootstrapConfigured
 } from './auth.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -66,6 +69,58 @@ const upload = multer({
 const app = express();
 const port = process.env.PORT || 3001;
 
+// Security Headers Middleware
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), display-capture=(self)');
+  next();
+});
+
+// CORS Configuration - Explicitly support configured production frontend, Vercel apps, and local dev
+const rawAllowed = process.env.ALLOWED_ORIGIN || '';
+const configuredOrigins = rawAllowed && rawAllowed !== '*'
+  ? rawAllowed.split(',').map(s => s.trim().replace(/\/$/, '')).filter(Boolean)
+  : [];
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow requests without Origin header (e.g. desktop agent, curl, server-to-server)
+    if (!origin) {
+      return callback(null, true);
+    }
+    const cleanOrigin = origin.replace(/\/$/, '');
+
+    // 1. Check explicitly configured production origins
+    if (configuredOrigins.length > 0 && configuredOrigins.includes(cleanOrigin)) {
+      return callback(null, true);
+    }
+
+    // 2. Allow local development origins
+    if (
+      cleanOrigin.startsWith('http://localhost') ||
+      cleanOrigin.startsWith('http://127.0.0.1')
+    ) {
+      return callback(null, true);
+    }
+
+    // 3. Allow Vercel production and preview deployment domains
+    if (cleanOrigin.endsWith('.vercel.app')) {
+      return callback(null, true);
+    }
+
+    // Deny unapproved origins
+    return callback(new Error(`CORS policy blocked access from origin ${origin}`));
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Session-Token']
+}));
+
+app.use(express.json({ limit: '6mb' }));
+app.use('/api/avatars', express.static(avatarsDir));
+
 // API Health Check
 app.get('/api/health', (req, res) => {
   res.json({
@@ -76,27 +131,6 @@ app.get('/api/health', (req, res) => {
     engine: 'inovex-sentinel-core'
   });
 });
-
-// Security Headers Middleware
-app.use((req, res, next) => {
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
-  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), display-capture=(self)');
-  next();
-});
-
-// CORS Configuration
-const allowedOrigin = process.env.ALLOWED_ORIGIN || '*';
-app.use(cors({
-  origin: allowedOrigin === '*' ? true : allowedOrigin,
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Session-Token']
-}));
-
-app.use(express.json({ limit: '6mb' }));
-app.use('/api/avatars', express.static(avatarsDir));
 
 // Rate Limiters
 const authLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 30, message: 'Too many authentication attempts. Please try again later.' });
@@ -314,6 +348,16 @@ app.post('/api/auth/login', authLimiter, (req, res) => {
       return res.status(401).json({ error: 'Access Denied: No authorized account found for this email address.' });
     }
 
+    // Check if account has not initialized its password yet (e.g. legacy or imported production accounts)
+    if (!user.password_hash || !user.password_salt) {
+      return res.status(403).json({ 
+        error: 'Account requires initial password setup. Please initialize your password using the secure setup procedure.',
+        requiresSetup: true,
+        email: user.email,
+        role: user.role
+      });
+    }
+
     // Verify salted hashed password
     const enteredPass = String(password).trim();
     let isPasswordValid = false;
@@ -372,6 +416,59 @@ app.post('/api/auth/login', authLimiter, (req, res) => {
   }
 });
 
+// Secure One-Time Password Initialization for Unhashed Accounts
+app.post('/api/auth/setup-password', authLimiter, (req, res) => {
+  const { email, password, bootstrapKey } = req.body;
+  try {
+    if (!email || !String(email).trim()) {
+      return res.status(400).json({ error: 'Authorized email address is required.' });
+    }
+    if (!password || String(password).trim().length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters long.' });
+    }
+
+    const cleanEmail = String(email).trim().toLowerCase();
+    const user = db.prepare('SELECT * FROM users WHERE LOWER(email) = ?').get(cleanEmail);
+    if (!user) {
+      return res.status(404).json({ error: 'Account not found for this email address.' });
+    }
+
+    if (user.password_hash && user.password_salt) {
+      return res.status(400).json({ error: 'Account password has already been initialized. Please sign in with your credentials.' });
+    }
+
+    // If account is a founder, require valid bootstrap key (fails closed if secret is not configured)
+    if (user.role === 'founder') {
+      if (!isBootstrapConfigured()) {
+        return res.status(503).json({ error: 'Password setup for founder account is disabled: INITIAL_FOUNDER_KEY is not configured on the server.' });
+      }
+      if (!isBootstrapKeyValid(bootstrapKey)) {
+        return res.status(403).json({ error: 'Access Denied: Valid Initial Founder Key is required to initialize this founder account.' });
+      }
+    }
+
+    const salt = generateSalt();
+    const hash = hashPassword(String(password).trim(), salt);
+
+    db.prepare('UPDATE users SET password_hash = ?, password_salt = ?, password = NULL WHERE id = ?').run(hash, salt, user.id);
+
+    const { token, expiresAt } = createSession(user.id, req);
+
+    const updatedUser = db.prepare('SELECT id, name, role, email, skill_set, device_mac_address, is_active, last_seen_at FROM users WHERE id = ?').get(user.id);
+
+    res.json({
+      success: true,
+      token,
+      expiresAt,
+      user: updatedUser,
+      route: user.role === 'founder' ? '/admin-dashboard' : '/workspace',
+      message: 'Password successfully initialized. Authenticated.'
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Error initializing password.' });
+  }
+});
+
 app.get('/api/auth/me', requireAuth, (req, res) => {
   res.json({
     success: true,
@@ -388,20 +485,154 @@ app.post('/api/auth/logout', requireAuth, (req, res) => {
   }
 });
 
-app.post('/api/users/register', authLimiter, (req, res) => {
-  const { id, name, email, password, role, skill_set, device_mac_address, bootstrapKey } = req.body;
+// Dedicated Founder Bootstrap Endpoint (One-time, persistent, high-entropy secret authorized)
+app.post('/api/auth/bootstrap-founder', authLimiter, (req, res) => {
+  const { name, email, password, skill_set, device_mac_address, bootstrapKey } = req.body;
+
   try {
-    if (!email || !email.trim()) {
-      return res.status(400).json({ error: 'Valid email address is required to register an account.' });
-    }
-    if (!password || !password.trim()) {
-      return res.status(400).json({ error: 'Password is required to register an account.' });
-    }
-    if (password.trim().length < 4) {
-      return res.status(400).json({ error: 'Password must be at least 4 characters long.' });
+    // 1. Check if bootstrap secret is configured on the server (fail closed)
+    if (!isBootstrapConfigured()) {
+      return res.status(503).json({ 
+        error: 'Founder bootstrap is disabled: INITIAL_FOUNDER_KEY environment variable is not configured on the server.' 
+      });
     }
 
-    const cleanEmail = email.trim().toLowerCase();
+    // 2. Check if client provided the bootstrap secret
+    if (!bootstrapKey || typeof bootstrapKey !== 'string' || !bootstrapKey.trim()) {
+      return res.status(401).json({ 
+        error: 'Founder bootstrap key is required to initialize the Executive Founder account.' 
+      });
+    }
+
+    // 3. Constant-time secret verification
+    if (!isBootstrapKeyValid(bootstrapKey)) {
+      return res.status(403).json({ 
+        error: 'Access Denied: Invalid founder bootstrap key.' 
+      });
+    }
+
+    // 4. Validate input credentials
+    if (!email || !String(email).trim()) {
+      return res.status(400).json({ error: 'Valid email address is required.' });
+    }
+    const cleanEmail = String(email).trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      return res.status(400).json({ error: 'Please enter a valid email address format.' });
+    }
+    if (!password || String(password).trim().length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters long.' });
+    }
+
+    // 5. Atomic transaction with SQLite write lock to prevent concurrent bootstrap race conditions
+    db.exec('BEGIN IMMEDIATE TRANSACTION;');
+    try {
+      // Check if bootstrap was already completed in security_bootstrap table
+      const existingBootstrap = db.prepare("SELECT * FROM security_bootstrap WHERE id = 1").get();
+      if (existingBootstrap) {
+        db.exec('ROLLBACK;');
+        return res.status(409).json({ 
+          error: 'Initial founder bootstrap has already been completed. Founder creation via bootstrap key is permanently disabled.' 
+        });
+      }
+
+      // Check if any active founder already exists in users table
+      const existingFounder = db.prepare("SELECT id, created_at FROM users WHERE role = 'founder' AND is_active = 1 LIMIT 1").get();
+      if (existingFounder) {
+        db.prepare("INSERT OR IGNORE INTO security_bootstrap (id, completed_at, founder_user_id) VALUES (1, ?, ?)").run(
+          existingFounder.created_at || Date.now(),
+          existingFounder.id
+        );
+        db.exec('ROLLBACK;');
+        return res.status(409).json({ 
+          error: 'An active Executive Founder account already exists. Bootstrap is permanently closed.' 
+        });
+      }
+
+      // Check if email already exists
+      const existingEmail = db.prepare("SELECT id FROM users WHERE LOWER(email) = ?").get(cleanEmail);
+      if (existingEmail) {
+        db.exec('ROLLBACK;');
+        return res.status(409).json({ 
+          error: 'An account with this email address already exists. Please sign in instead.' 
+        });
+      }
+
+      // Generate secure user ID, salt, hash
+      const userId = 'usr_fnd_' + Date.now().toString(36) + '_' + crypto.randomBytes(4).toString('hex');
+      const salt = generateSalt();
+      const hash = hashPassword(String(password).trim(), salt);
+      const now = Date.now();
+      const cleanName = (name && String(name).trim()) || 'Executive Founder';
+      const cleanSkill = (skill_set && String(skill_set).trim()) || 'Executive Director';
+      const cleanMac = (device_mac_address && String(device_mac_address).trim()) || '00:1A:2B:3C:4D:5E';
+
+      // Insert founder into users
+      db.prepare(`
+        INSERT INTO users (id, name, role, device_mac_address, is_active, email, password_hash, password_salt, skill_set, last_seen_at, created_at)
+        VALUES (?, ?, 'founder', ?, 1, ?, ?, ?, ?, ?, ?)
+      `).run(userId, cleanName, cleanMac, cleanEmail, hash, salt, cleanSkill, now, now);
+
+      // Insert into security_bootstrap (enforces database-level CHECK(id = 1) constraint)
+      db.prepare(`
+        INSERT INTO security_bootstrap (id, completed_at, founder_user_id)
+        VALUES (1, ?, ?)
+      `).run(now, userId);
+
+      db.exec('COMMIT;');
+
+      const sanitizedUser = {
+        id: userId,
+        name: cleanName,
+        role: 'founder',
+        email: cleanEmail,
+        skill_set: cleanSkill,
+        device_mac_address: cleanMac,
+        is_active: 1,
+        created_at: now,
+        last_seen_at: now
+      };
+
+      const { token, expiresAt } = createSession(userId, req);
+      broadcast('NODE_REGISTERED', { user: sanitizedUser });
+
+      res.status(201).json({
+        success: true,
+        token,
+        expiresAt,
+        user: sanitizedUser,
+        route: '/admin-dashboard',
+        message: 'Founder bootstrap successfully completed. Executive Founder enclave initialized.'
+      });
+    } catch (txErr) {
+      try { db.exec('ROLLBACK;'); } catch (rbErr) {}
+      if (txErr.message && txErr.message.includes('UNIQUE constraint failed')) {
+        return res.status(409).json({ error: 'Concurrent bootstrap conflict: Initial founder has already been initialized.' });
+      }
+      throw txErr;
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Founder bootstrap failed.' });
+  }
+});
+
+// Standard User Registration Endpoint
+app.post('/api/users/register', authLimiter, (req, res) => {
+  const { name, email, password, role, skill_set, device_mac_address } = req.body;
+  try {
+    if (!email || !String(email).trim()) {
+      return res.status(400).json({ error: 'Valid email address is required to register an account.' });
+    }
+    const cleanEmail = String(email).trim().toLowerCase();
+    // Validate email format
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      return res.status(400).json({ error: 'Please enter a valid email address format.' });
+    }
+    if (!password || !String(password).trim()) {
+      return res.status(400).json({ error: 'Password is required to register an account.' });
+    }
+    if (String(password).trim().length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters long.' });
+    }
 
     // Check if account already exists - PREVENT ACCOUNT TAKEOVER
     const existing = db.prepare('SELECT id FROM users WHERE LOWER(email) = ?').get(cleanEmail);
@@ -409,29 +640,54 @@ app.post('/api/users/register', authLimiter, (req, res) => {
       return res.status(409).json({ error: 'An account with this email address already exists. Please sign in instead.' });
     }
 
-    // Role assignment: Directly support founder and employee account creation without bootstrap key requirement
-    const targetRole = role === 'founder' ? 'founder' : 'employee';
+    // Check if caller is authenticated as an existing founder
+    let callerIsFounder = false;
+    const authHeader = req.headers['authorization'] || req.headers['x-session-token'];
+    if (authHeader) {
+      const rawToken = authHeader.replace(/^Bearer\s+/i, '').trim();
+      const callingUser = validateSessionToken(rawToken);
+      if (callingUser && callingUser.role === 'founder') {
+        callerIsFounder = true;
+      }
+    }
 
+    // Role Enforcement:
+    // - Public callers can NEVER register as founder. Attempting to do so yields 403 Forbidden.
+    // - Unspecified or default role is 'employee'.
+    // - Authenticated founders can register other founders or employees.
+    let assignedRole = 'employee';
+    if (role && String(role).trim().toLowerCase() === 'founder') {
+      if (callerIsFounder) {
+        assignedRole = 'founder';
+      } else {
+        return res.status(403).json({ 
+          error: 'Access Denied: Public registration cannot grant Executive Founder privileges. Use the authorized founder bootstrap flow.' 
+        });
+      }
+    } else {
+      assignedRole = 'employee';
+    }
+
+    // Generate secure server-controlled user ID (never trust client ID)
+    const userId = (assignedRole === 'founder' ? 'usr_fnd_' : 'usr_emp_') + Date.now().toString(36) + '_' + crypto.randomBytes(4).toString('hex');
     const cleanMac = (device_mac_address && String(device_mac_address).trim()) || 'A4:C1:38:9B:21:40';
-    const cleanName = (name && String(name).trim()) || (targetRole === 'founder' ? 'Executive Founder' : 'Engineering Operator');
-    const cleanSkill = (skill_set && String(skill_set).trim()) || (targetRole === 'founder' ? 'Executive Director' : 'General Engineering');
+    const cleanName = (name && String(name).trim()) || (assignedRole === 'founder' ? 'Executive Founder' : 'Engineering Operator');
+    const cleanSkill = (skill_set && String(skill_set).trim()) || (assignedRole === 'founder' ? 'Executive Director' : 'General Engineering');
 
     // Generate secure password salt & hash
     const salt = generateSalt();
-    const hash = hashPassword(password.trim(), salt);
-
-    const userId = id || ('usr_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 6));
+    const hash = hashPassword(String(password).trim(), salt);
     const now = Date.now();
 
     db.prepare(`
       INSERT INTO users (id, name, role, device_mac_address, is_active, email, password_hash, password_salt, skill_set, last_seen_at, created_at)
       VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
-    `).run(userId, cleanName, targetRole, cleanMac, cleanEmail, hash, salt, cleanSkill, now, now);
+    `).run(userId, cleanName, assignedRole, cleanMac, cleanEmail, hash, salt, cleanSkill, now, now);
 
     const sanitizedUser = {
       id: userId,
       name: cleanName,
-      role: targetRole,
+      role: assignedRole,
       email: cleanEmail,
       skill_set: cleanSkill,
       device_mac_address: cleanMac,
@@ -519,9 +775,13 @@ app.put('/api/users/profile', requireAuth, (req, res) => {
       return res.status(404).json({ error: 'User node identity not found in registry.' });
     }
 
-    // Role Enforcement: Non-founders can NEVER change role
-    if (actingUser.role !== 'founder' && req.body.role && req.body.role !== targetUser.role) {
-      return res.status(403).json({ error: 'Permission denied: Node operators cannot alter role privileges.' });
+    // Role Enforcement: Users can NEVER alter their own role through profile updates
+    if (req.body.role) {
+      if (actingUser.role !== 'founder' || !targetUserId || targetUserId === actingUser.id) {
+        if (req.body.role !== targetUser.role) {
+          return res.status(403).json({ error: 'Permission denied: Users cannot alter their own role privileges.' });
+        }
+      }
     }
 
     // Input validation
@@ -1667,28 +1927,57 @@ app.get('*', (req, res, next) => {
   res.sendFile(indexPath);
 });
 
+// Dedicated JSON 404 handler for all unmatched API endpoints
+app.all(['/api', '/api/*'], (req, res) => {
+  res.status(404).json({
+    error: 'Endpoint not found',
+    path: req.originalUrl,
+    method: req.method,
+    timestamp: Date.now()
+  });
+});
+
+// Centralized JSON error handler
+app.use((err, req, res, next) => {
+  if (res.headersSent) {
+    return next(err);
+  }
+  const isCors = err.message && (err.message.includes('CORS') || err.message.includes('cors'));
+  const status = err.status || err.statusCode || (isCors ? 403 : 500);
+  res.status(status).json({
+    error: err.message || 'Internal server error',
+    timestamp: Date.now()
+  });
+});
+
 // Periodic background maintenance (purges sessions expired > 7 days)
-setInterval(() => {
+const maintenanceTimer = setInterval(() => {
   try {
     db.prepare('DELETE FROM sessions WHERE expires_at <= ?').run(Date.now());
   } catch (e) {}
 }, 3600000); // Once per hour
+if (maintenanceTimer.unref) maintenanceTimer.unref();
 
-server.listen(port, '0.0.0.0', () => {
-  console.log(`\n========================================================`);
-  console.log(`[Lexven Inovex Web Platform] Online & Secure!`);
-  console.log(`> Desktop Browser: http://localhost:${port}`);
-  
-  const nets = os.networkInterfaces();
-  for (const name of Object.keys(nets)) {
-    for (const net of nets[name]) {
-      if (net.family === 'IPv4' && !net.internal) {
-        console.log(`> Android Sets:    http://${net.address}:${port}`);
+// Start HTTP server unless running inside automated test harness
+let listener = null;
+if (process.env.NODE_ENV !== 'test') {
+  listener = server.listen(port, '0.0.0.0', () => {
+    console.log(`\n========================================================`);
+    console.log(`[Lexven Inovex Web Platform] Online & Secure!`);
+    console.log(`> Desktop Browser: http://localhost:${port}`);
+    
+    const nets = os.networkInterfaces();
+    for (const name of Object.keys(nets)) {
+      for (const net of nets[name]) {
+        if (net.family === 'IPv4' && !net.internal) {
+          console.log(`> Android Sets:    http://${net.address}:${port}`);
+        }
       }
     }
-  }
-  console.log(`[WebSocket Server] Sub-second telemetry stream listening with RBAC`);
-  console.log(`========================================================\n`);
-});
+    console.log(`[WebSocket Server] Sub-second telemetry stream listening with RBAC`);
+    console.log(`========================================================\n`);
+  });
+}
 
+export { app, server, listener };
 export default app;

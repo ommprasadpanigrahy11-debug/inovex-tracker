@@ -3,7 +3,36 @@ import db from './db.js';
 
 // Configuration
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
-const BOOTSTRAP_FOUNDER_KEY = process.env.INITIAL_FOUNDER_KEY || process.env.BOOTSTRAP_TOKEN || 'INOVEX-FOUNDER-BOOTSTRAP-2026';
+const BOOTSTRAP_FOUNDER_KEY = process.env.INITIAL_FOUNDER_KEY || process.env.BOOTSTRAP_TOKEN || null;
+
+/**
+ * Checks whether an initial founder bootstrap secret is configured in the environment
+ */
+export function isBootstrapConfigured() {
+  const configuredKey = process.env.INITIAL_FOUNDER_KEY || process.env.BOOTSTRAP_TOKEN || process.env.FOUNDER_BOOTSTRAP_SECRET;
+  return typeof configuredKey === 'string' && configuredKey.trim().length > 0;
+}
+
+/**
+ * Validates bootstrap key using timingSafeEqual; returns false if no key configured or mismatch
+ */
+export function isBootstrapKeyValid(providedKey) {
+  const configuredKey = process.env.INITIAL_FOUNDER_KEY || process.env.BOOTSTRAP_TOKEN || process.env.FOUNDER_BOOTSTRAP_SECRET;
+  if (!configuredKey || typeof configuredKey !== 'string' || !configuredKey.trim()) {
+    return false;
+  }
+  if (!providedKey || typeof providedKey !== 'string') {
+    return false;
+  }
+  try {
+    const confBuf = Buffer.from(configuredKey.trim());
+    const provBuf = Buffer.from(providedKey.trim());
+    if (confBuf.length !== provBuf.length) return false;
+    return crypto.timingSafeEqual(confBuf, provBuf);
+  } catch (e) {
+    return false;
+  }
+}
 
 /**
  * Generate a cryptographically secure random salt

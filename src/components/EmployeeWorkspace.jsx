@@ -29,7 +29,9 @@ import {
   triggerAiActivityCheck, 
   sendTelemetryBeat,
   computeTaskStatus,
-  updateTaskStatus
+  updateTaskStatus,
+  getApiUrl,
+  getAuthHeaders
 } from '../lib/dataService';
 import { uploadRecordingToSupabase } from '../lib/supabase';
 import { FounderEmployeeView } from './FounderEmployeeView';
@@ -334,12 +336,9 @@ export function EmployeeWorkspace({
 
     if (workspaceData?.task?.id) {
       try {
-        await fetch('/api/workspace/timer-complete', {
+        await fetch(getApiUrl('/api/workspace/timer-complete'), {
           method: 'POST',
-          headers: { 
-            'Content-Type': 'application/json',
-            ...(localStorage.getItem('invx_session_token') ? { 'Authorization': `Bearer ${localStorage.getItem('invx_session_token')}` } : {})
-          },
+          headers: getAuthHeaders(),
           body: JSON.stringify({
             taskId: workspaceData.task.id,
             userId: currentUser.id

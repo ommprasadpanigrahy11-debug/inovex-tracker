@@ -13,10 +13,7 @@ export const STORAGE_KEYS = {
 };
 
 // Base URL for backend API requests (supports separate backend deployment or same-host proxy)
-const API_BASE = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
-const isVercelHost = typeof window !== 'undefined' && window.location.hostname.endsWith('vercel.app');
-// On static Vercel host without an external backend URL, bypass local express routes and connect to Supabase
-const isStaticCloudOnly = isVercelHost && !API_BASE;
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
 
 export function getApiUrl(endpoint) {
   const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
@@ -121,92 +118,114 @@ export async function loginUser({ email, password }) {
   const cleanEmail = email ? String(email).trim().toLowerCase() : '';
   const cleanPass = password ? String(password).trim() : '';
 
-  // 1. Try Backend Express API if reachable (Skip on static Vercel host without external API)
-  if (!isStaticCloudOnly) {
-    try {
-      const res = await fetch(getApiUrl('/api/auth/login'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: cleanEmail, password: cleanPass })
-      });
+  try {
+    const res = await fetch(getApiUrl('/api/auth/login'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: cleanEmail, password: cleanPass })
+    });
 
-      const contentType = res.headers.get('content-type') || '';
-      if (contentType.includes('application/json')) {
-        const data = await res.json();
-        if (res.ok && data.success) {
-          const formattedUser = formatUserFromDb(data.user);
-          try {
-            localStorage.setItem(STORAGE_KEYS.TOKEN, data.token);
-            localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(formattedUser));
-          } catch (e) {}
-
-          return {
-            success: true,
-            user: formattedUser,
-            token: data.token,
-            route: data.route || (formattedUser.role === 'founder' ? '/admin-dashboard' : '/workspace')
-          };
-        } else if (res.status === 401 || res.status === 400 || res.status === 403) {
-          return { 
-            success: false, 
-            error: data.error || 'Access Denied: Invalid credentials.' 
-          };
-        }
-      }
-    } catch (err) {
-      console.warn('[Auth API unreachable, falling back to Supabase Cloud verification]', err);
-    }
-  }
-
-  // 2. Resilient Cloud Fallback (Supabase Direct)
-  if (isSupabaseConfigured && supabase) {
-    try {
-      const { data: userRecords, error } = await supabase
-        .from('users')
-        .select('*')
-        .eq('email', cleanEmail)
-        .limit(1);
-
-      if (!error && userRecords && userRecords.length > 0) {
-        const user = formatUserFromDb(userRecords[0]);
-        const syntheticToken = 'invx_cloud_' + Date.now() + '_' + Math.random().toString(36).substring(2, 10);
-        
+    const contentType = res.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      const data = await res.json();
+      if (res.ok && data.success) {
+        const formattedUser = formatUserFromDb(data.user);
         try {
-          localStorage.setItem(STORAGE_KEYS.TOKEN, syntheticToken);
-          localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
+          localStorage.setItem(STORAGE_KEYS.TOKEN, data.token);
+          localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(formattedUser));
         } catch (e) {}
 
         return {
           success: true,
-          user,
-          token: syntheticToken,
-          route: user.role === 'founder' ? '/admin-dashboard' : '/workspace'
+          user: formattedUser,
+          token: data.token,
+          route: data.route || (formattedUser.role === 'founder' ? '/admin-dashboard' : '/workspace')
+        };
+      } else if (data.requiresSetup) {
+        return {
+          success: false,
+          requiresSetup: true,
+          error: data.error,
+          email: cleanEmail,
+          role: data.role
+        };
+      } else {
+        return { 
+          success: false, 
+          error: data.error || 'Access Denied: Invalid credentials.' 
+        };
+      }
+    } else {
+      return {
+        success: false,
+        error: `Authentication endpoint returned unexpected response (${res.status}). Verify backend deployment.`
+      };
+    }
+  } catch (err) {
+    return {
+      success: false,
+      error: 'Cannot reach Inovex authentication server. Please verify backend server is online and VITE_API_URL is configured.'
+    };
+  }
+}
+
+/**
+ * Initialize password for an account that has no password hash set yet
+ */
+export async function setupUserPassword({ email, password, bootstrapKey }) {
+  const cleanEmail = email ? String(email).trim().toLowerCase() : '';
+  const cleanPass = password ? String(password).trim() : '';
+
+  try {
+    const res = await fetch(getApiUrl('/api/auth/setup-password'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: cleanEmail, password: cleanPass, bootstrapKey })
+    });
+
+    const contentType = res.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      const data = await res.json();
+      if (res.ok && data.success) {
+        const formattedUser = formatUserFromDb(data.user);
+        try {
+          localStorage.setItem(STORAGE_KEYS.TOKEN, data.token);
+          localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(formattedUser));
+        } catch (e) {}
+        return {
+          success: true,
+          user: formattedUser,
+          token: data.token,
+          route: data.route || (formattedUser.role === 'founder' ? '/admin-dashboard' : '/workspace'),
+          message: data.message
         };
       } else {
         return {
           success: false,
-          error: 'Access Denied: Node not registered in security directory.'
+          error: data.error || 'Failed to initialize password.'
         };
       }
-    } catch (e) {
-      console.error('[Supabase Auth Fallback Error]', e);
+    } else {
+      return {
+        success: false,
+        error: `Setup endpoint returned error (${res.status}).`
+      };
     }
+  } catch (err) {
+    return {
+      success: false,
+      error: 'Cannot reach Inovex backend server to initialize account password.'
+    };
   }
-
-  return {
-    success: false,
-    error: 'Cannot reach authentication server. Verify server or Supabase connectivity.'
-  };
 }
 
 /**
- * Verify currently stored session with server or cloud
+ * Verify currently stored session with backend server
  */
 export async function verifyStoredSession() {
   const token = getAuthToken();
   if (!token) return null;
 
-  // 1. Try Backend API
   try {
     const res = await fetch(getApiUrl('/api/auth/me'), {
       headers: getAuthHeaders()
@@ -222,19 +241,14 @@ export async function verifyStoredSession() {
         } catch (e) {}
         return user;
       }
-    } else if (res.status === 401) {
+    } else if (res.status === 401 || res.status === 403) {
       logoutUser();
       return null;
     }
-  } catch (e) {}
-
-  // 2. Resilient Cached Session Restoration
-  try {
-    const cached = localStorage.getItem(STORAGE_KEYS.USER);
-    if (cached) {
-      return formatUserFromDb(JSON.parse(cached));
-    }
-  } catch (err) {}
+  } catch (e) {
+    // If backend is completely offline, do NOT treat localStorage as verified authentication
+    return null;
+  }
 
   return null;
 }
@@ -260,33 +274,30 @@ export async function logoutUser() {
  * Update user personal profile
  */
 export async function updateUserProfile(profileData) {
-  // 1. Try Backend API
-  if (!isStaticCloudOnly) {
-    try {
-      const res = await fetch(getApiUrl('/api/users/profile'), {
-        method: 'PUT',
-        headers: getAuthHeaders(),
-        body: JSON.stringify(profileData)
-      });
+  // 1. Backend API
+  try {
+    const res = await fetch(getApiUrl('/api/users/profile'), {
+      method: 'PUT',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(profileData)
+    });
 
-      const contentType = res.headers.get('content-type') || '';
-      if (contentType.includes('application/json')) {
-        const data = await res.json();
-        if (res.ok && data.success) {
-          const formatted = formatUserFromDb(data.user);
-          try {
-            localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(formatted));
-          } catch (e) {}
-          return { success: true, user: formatted, message: data.message };
-        } else {
-          throw new Error(data.error || 'Failed to update profile.');
-        }
+    const contentType = res.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      const data = await res.json();
+      if (res.ok && data.success) {
+        const formatted = formatUserFromDb(data.user);
+        try {
+          localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(formatted));
+        } catch (e) {}
+        return { success: true, user: formatted, message: data.message };
+      } else {
+        throw new Error(data.error || 'Failed to update profile.');
       }
-    } catch (err) {
-      if (err.message && (err.message.includes('required') || err.message.includes('Permission') || err.message.includes('Security'))) {
-        throw err;
-      }
-      console.warn('[Backend profile update failed; falling back to direct cloud]', err);
+    }
+  } catch (err) {
+    if (err.message && (err.message.includes('required') || err.message.includes('Permission') || err.message.includes('Security') || err.message.includes('denied'))) {
+      throw err;
     }
   }
 
@@ -335,33 +346,31 @@ export async function updateUserProfile(profileData) {
  * Update user notification preferences
  */
 export async function updateNotificationPreferences(preferences) {
-  if (!isStaticCloudOnly) {
-    try {
-      const res = await fetch(getApiUrl('/api/users/notifications'), {
-        method: 'PUT',
-        headers: getAuthHeaders(),
-        body: JSON.stringify({ preferences })
-      });
+  try {
+    const res = await fetch(getApiUrl('/api/users/notifications'), {
+      method: 'PUT',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ preferences })
+    });
 
-      const contentType = res.headers.get('content-type') || '';
-      if (contentType.includes('application/json')) {
-        const data = await res.json();
-        if (res.ok && data.success) {
-          const cached = getStoredUser();
-          if (cached) {
-            cached.notification_preferences = data.notification_preferences;
-            try {
-              localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(cached));
-            } catch (e) {}
-          }
-          return { success: true, notification_preferences: data.notification_preferences };
-        } else {
-          throw new Error(data.error || 'Failed to save notifications.');
+    const contentType = res.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      const data = await res.json();
+      if (res.ok && data.success) {
+        const cached = getStoredUser();
+        if (cached) {
+          cached.notification_preferences = data.notification_preferences;
+          try {
+            localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(cached));
+          } catch (e) {}
         }
+        return { success: true, notification_preferences: data.notification_preferences };
+      } else {
+        throw new Error(data.error || 'Failed to save notifications.');
       }
-    } catch (err) {
-      console.warn('[Notification API failed, updating local state]', err);
     }
+  } catch (err) {
+    console.warn('[Notification API failed, updating local state]', err);
   }
 
   const cached = getStoredUser();
@@ -378,26 +387,24 @@ export async function updateNotificationPreferences(preferences) {
  * Upload Avatar photo
  */
 export async function uploadAvatarPhoto(base64Data) {
-  if (!isStaticCloudOnly) {
-    try {
-      const res = await fetch(getApiUrl('/api/users/avatar'), {
-        method: 'POST',
-        headers: getAuthHeaders(),
-        body: JSON.stringify({ imageBase64: base64Data })
-      });
+  try {
+    const res = await fetch(getApiUrl('/api/users/avatar'), {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ imageBase64: base64Data })
+    });
 
-      const contentType = res.headers.get('content-type') || '';
-      if (contentType.includes('application/json')) {
-        const data = await res.json();
-        if (res.ok && data.success) {
-          return { success: true, avatar_url: data.avatar_url };
-        } else {
-          throw new Error(data.error || 'Failed to upload avatar photo.');
-        }
+    const contentType = res.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      const data = await res.json();
+      if (res.ok && data.success) {
+        return { success: true, avatar_url: data.avatar_url };
+      } else {
+        throw new Error(data.error || 'Failed to upload avatar photo.');
       }
-    } catch (err) {
-      if (err.message) throw err;
     }
+  } catch (err) {
+    if (err.message) throw err;
   }
   return { success: true, avatar_url: base64Data };
 }
@@ -410,156 +417,146 @@ export async function deleteUserAccount({ password }) {
     throw new Error('Account password verification is required.');
   }
 
-  if (!isStaticCloudOnly) {
-    const res = await fetch(getApiUrl('/api/users/delete-account'), {
+  const res = await fetch(getApiUrl('/api/users/delete-account'), {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ password: password.trim() })
+  });
+
+  const contentType = res.headers.get('content-type') || '';
+  if (contentType.includes('application/json')) {
+    const data = await res.json();
+    if (res.ok && data.success) {
+      await logoutUser();
+      return { success: true, message: data.message };
+    } else {
+      throw new Error(data.error || 'Failed to delete account.');
+    }
+  } else {
+    throw new Error(`Server returned error status ${res.status}`);
+  }
+}
+
+/**
+ * Initial Founder Bootstrap via dedicated backend endpoint
+ */
+export async function bootstrapFounder({ name, email, password, skill_set, device_mac_address, bootstrapKey }) {
+  const cleanEmail = email ? String(email).trim().toLowerCase() : '';
+  const cleanName = name ? String(name).trim() : 'Executive Founder';
+  const cleanSkill = skill_set ? String(skill_set).trim() : 'Executive Director';
+  const cleanPass = password ? String(password).trim() : '';
+  const mac = (device_mac_address && String(device_mac_address).trim()) || generateMacAddress();
+
+  try {
+    const res = await fetch(getApiUrl('/api/auth/bootstrap-founder'), {
       method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify({ password: password.trim() })
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: cleanName,
+        email: cleanEmail,
+        password: cleanPass,
+        skill_set: cleanSkill,
+        device_mac_address: mac,
+        bootstrapKey
+      })
     });
 
     const contentType = res.headers.get('content-type') || '';
     if (contentType.includes('application/json')) {
       const data = await res.json();
       if (res.ok && data.success) {
-        await logoutUser();
-        return { success: true, message: data.message };
+        const formattedUser = formatUserFromDb(data.user);
+        if (data.token) {
+          try {
+            localStorage.setItem(STORAGE_KEYS.TOKEN, data.token);
+            localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(formattedUser));
+          } catch (e) {}
+        }
+        return { success: true, user: formattedUser, token: data.token };
       } else {
-        throw new Error(data.error || 'Failed to delete account.');
+        throw new Error(data.error || 'Founder bootstrap failed');
       }
     } else {
-      throw new Error(`Server returned error status ${res.status}`);
+      throw new Error(`Server returned unexpected response (${res.status}). Verify backend deployment.`);
     }
+  } catch (err) {
+    if (err.message && (err.message.includes('already exists') || err.message.includes('Access Denied') || err.message.includes('required') || err.message.includes('already been completed') || err.message.includes('disabled'))) {
+      throw err;
+    }
+    throw new Error(err.message || 'Founder bootstrap failed: Backend server is unreachable.');
   }
-
-  // Direct Cloud Fallback
-  if (isSupabaseConfigured && supabase) {
-    const cachedUser = getStoredUser();
-    if (!cachedUser) throw new Error('No active user identity.');
-    const { error } = await supabase.from('users').delete().eq('id', cachedUser.id);
-    if (error) throw new Error(error.message);
-    await logoutUser();
-    return { success: true, message: 'Account deleted.' };
-  }
-
-  throw new Error('Cannot reach verification server to authorize deletion.');
 }
 
 /**
  * Register a new node identity via Backend API or direct Cloud Fallback
  */
-export async function registerUser({ name, email, password, role = 'employee', skill_set, device_mac_address }) {
+export async function registerUser({ name, email, password, role = 'employee', skill_set, device_mac_address, bootstrapKey }) {
   const cleanEmail = email ? String(email).trim().toLowerCase() : '';
   const cleanName = name ? String(name).trim() : (role === 'founder' ? 'Executive Founder' : 'Engineering Operator');
-  const cleanSkill = skill_set ? String(skill_set).trim() : (role === 'founder' ? 'Executive Founder' : 'Engineering Operator');
+  const cleanSkill = skill_set ? String(skill_set).trim() : (role === 'founder' ? 'Executive Director' : 'Engineering Operator');
   const cleanPass = password ? String(password).trim() : '';
   const mac = (device_mac_address && String(device_mac_address).trim()) || generateMacAddress();
-  const userId = 'usr_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 6);
 
-  // 1. Try Backend API (Skip on static Vercel host without external API)
-  if (!isStaticCloudOnly) {
-    try {
-      const res = await fetch(getApiUrl('/api/users/register'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: cleanName,
-          email: cleanEmail,
-          password: cleanPass,
-          role,
-          skill_set: cleanSkill,
-          device_mac_address: mac
-        })
-      });
+  try {
+    const res = await fetch(getApiUrl('/api/users/register'), {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({
+        name: cleanName,
+        email: cleanEmail,
+        password: cleanPass,
+        role,
+        skill_set: cleanSkill,
+        device_mac_address: mac,
+        bootstrapKey
+      })
+    });
 
-      const contentType = res.headers.get('content-type') || '';
-      if (contentType.includes('application/json')) {
-        const data = await res.json();
-        if (res.ok && data.success) {
-          const formattedUser = formatUserFromDb(data.user);
-          if (data.token) {
-            try {
-              localStorage.setItem(STORAGE_KEYS.TOKEN, data.token);
-              localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(formattedUser));
-            } catch (e) {}
-          }
-          return { success: true, user: formattedUser, token: data.token };
-        } else if (res.status === 400 || res.status === 409 || res.status === 403) {
-          throw new Error(data.error || 'Registration failed');
+    const contentType = res.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      const data = await res.json();
+      if (res.ok && data.success) {
+        const formattedUser = formatUserFromDb(data.user);
+        if (data.token) {
+          try {
+            localStorage.setItem(STORAGE_KEYS.TOKEN, data.token);
+            localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(formattedUser));
+          } catch (e) {}
         }
+        return { success: true, user: formattedUser, token: data.token };
+      } else {
+        throw new Error(data.error || 'Registration failed');
       }
-    } catch (err) {
-      if (err.message && (err.message.includes('already exists') || err.message.includes('restricted') || err.message.includes('required'))) {
-        throw err;
-      }
-      console.warn('[Backend Registration unavailable; engaging direct Supabase cloud persistence]', err);
+    } else {
+      throw new Error(`Server returned unexpected response (${res.status}). Verify backend deployment.`);
     }
+  } catch (err) {
+    if (err.message && (err.message.includes('already exists') || err.message.includes('Unauthorized') || err.message.includes('required') || err.message.includes('characters'))) {
+      throw err;
+    }
+    throw new Error(err.message || 'Registration failed: Backend server is unreachable.');
   }
-
-  // 2. Direct Supabase Cloud Registration Fallback
-  if (isSupabaseConfigured && supabase) {
-    // Check for duplicate account
-    const { data: existing } = await supabase
-      .from('users')
-      .select('id')
-      .eq('email', cleanEmail);
-
-    if (existing && existing.length > 0) {
-      throw new Error('An authorized node with this email address already exists. Please sign in instead.');
-    }
-
-    const newRecord = {
-      id: userId,
-      name: `${cleanName} (${cleanSkill})`,
-      email: cleanEmail,
-      role,
-      device_mac_address: mac,
-      created_at: Date.now()
-    };
-
-    const { data: inserted, error: insertError } = await supabase
-      .from('users')
-      .insert(newRecord)
-      .select();
-
-    if (insertError) {
-      console.error('[Supabase Insert Error]', insertError);
-      throw new Error(insertError.message || 'Cloud database rejected registration.');
-    }
-
-    const formattedUser = formatUserFromDb(inserted && inserted[0] ? inserted[0] : newRecord);
-    const token = 'invx_cloud_' + Date.now() + '_' + Math.random().toString(36).substring(2, 10);
-    try {
-      localStorage.setItem(STORAGE_KEYS.TOKEN, token);
-      localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(formattedUser));
-    } catch (e) {}
-
-    return { success: true, user: formattedUser, token };
-  }
-
-  throw new Error('Registration failed: Neither backend server nor Supabase cloud is reachable.');
 }
 
 // ==============================================================================
 // 2. FETCH USERS DIRECTORY
 // ==============================================================================
 export async function fetchUsers() {
-  // 1. Try Backend API (Skip on static Vercel host without external API)
-  if (!isStaticCloudOnly) {
-    try {
-      const res = await fetch(getApiUrl('/api/users'), {
-        headers: getAuthHeaders()
-      });
-      const contentType = res.headers.get('content-type') || '';
-      if (res.ok && contentType.includes('application/json')) {
-        const data = await res.json();
-        if (Array.isArray(data) && data.length > 0) {
-          return data.map(formatUserFromDb);
-        }
+  // 1. Try Backend API
+  try {
+    const res = await fetch(getApiUrl('/api/users'), {
+      headers: getAuthHeaders()
+    });
+    const contentType = res.headers.get('content-type') || '';
+    if (res.ok && contentType.includes('application/json')) {
+      const data = await res.json();
+      if (Array.isArray(data) && data.length > 0) {
+        return data.map(formatUserFromDb);
       }
-    } catch (e) {}
-  }
+    }
+  } catch (e) {}
 
-  // 2. Fallback to Supabase Cloud directly (query select('*') to gracefully adapt to table schema)
+  // 2. Read-only fallback to Supabase Cloud for login roster
   if (isSupabaseConfigured && supabase) {
     try {
       const { data, error } = await supabase

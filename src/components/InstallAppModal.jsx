@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Smartphone, Monitor, Download, QrCode, Check, Copy, ExternalLink, X, Shield, Sparkles } from 'lucide-react';
+import { getApiUrl } from '../lib/dataService';
 
 export function InstallAppModal({ isOpen, onClose, deferredPrompt, onPromptInstall }) {
   const [networkInfo, setNetworkInfo] = useState(null);
@@ -11,7 +12,7 @@ export function InstallAppModal({ isOpen, onClose, deferredPrompt, onPromptInsta
 
   useEffect(() => {
     if (isOpen) {
-      fetch('/api/system/network-info')
+      fetch(getApiUrl('/api/system/network-info'))
         .then(res => res.json())
         .then(data => setNetworkInfo(data))
         .catch(err => console.log('Could not fetch network info', err));

@@ -22,7 +22,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Configuration
-const SERVER_URL = process.env.INOVEX_SERVER || 'http://localhost:5000';
+const SERVER_URL = process.env.INOVEX_SERVER || 'http://localhost:3001';
 const SPRINT_DURATION_SECONDS = process.env.TEST_FAST_SPRINT ? 15 : 5400; // 90 mins (5400s) default
 let authToken = process.env.INOVEX_TOKEN || '';
 

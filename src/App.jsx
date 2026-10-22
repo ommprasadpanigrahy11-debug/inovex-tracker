@@ -157,9 +157,11 @@ export function App() {
     };
     window.addEventListener('inovex_telemetry_event', customEventHandler);
 
-    // 2. Connect to WebSocket Engine (if configured via VITE_WS_URL or running locally)
+    // 2. Connect to WebSocket Engine (if configured via VITE_WS_URL, derived from VITE_API_BASE_URL, or running locally)
     let socket = null;
-    const configuredWs = import.meta.env.VITE_WS_URL;
+    const apiBase = (import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || '').trim();
+    const derivedWs = apiBase ? apiBase.replace(/^http:/i, 'ws:').replace(/^https:/i, 'wss:') : null;
+    const configuredWs = import.meta.env.VITE_WS_URL || derivedWs;
     const isVercelHost = typeof window !== 'undefined' && window.location.hostname.endsWith('vercel.app');
 
     if (configuredWs || !isVercelHost) {
