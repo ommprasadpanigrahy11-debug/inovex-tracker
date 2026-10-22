@@ -1,0 +1,38 @@
+name: CI Test & Build Gate
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-build:
+    name: Automated Security, RBAC Tests & Vite Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Execute Security, RBAC & API Test Suite
+        run: npm test
+        env:
+          NODE_ENV: test
+          ALLOWED_ORIGIN: https://inovex-production-app.vercel.app
+          INITIAL_FOUNDER_KEY: test_ci_founder_bootstrap_key_entropy_high_2026
+
+      - name: Execute Production Vite Build
+        run: npm run build:web
