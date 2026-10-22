@@ -29,6 +29,10 @@ const recordingsDir = path.join(__dirname, 'data/recordings');
 if (!fs.existsSync(recordingsDir)) {
   fs.mkdirSync(recordingsDir, { recursive: true });
 }
+const avatarsDir = path.join(__dirname, 'data/avatars');
+if (!fs.existsSync(avatarsDir)) {
+  fs.mkdirSync(avatarsDir, { recursive: true });
+}
 
 // Multer storage for 90-minute recordings with strict validation
 const storage = multer.diskStorage({
@@ -91,7 +95,8 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Session-Token']
 }));
 
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({ limit: '6mb' }));
+app.use('/api/avatars', express.static(avatarsDir));
 
 // Rate Limiters
 const authLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 30, message: 'Too many authentication attempts. Please try again later.' });
@@ -324,6 +329,13 @@ app.post('/api/auth/login', authLimiter, (req, res) => {
     // Generate secure session token
     const { token, expiresAt } = createSession(user.id, req);
 
+    let notifPrefs = null;
+    try {
+      if (user.notification_preferences) {
+        notifPrefs = typeof user.notification_preferences === 'string' ? JSON.parse(user.notification_preferences) : user.notification_preferences;
+      }
+    } catch (e) {}
+
     // Sanitize user object (NEVER return password hashes or salts to client)
     const sanitizedUser = {
       id: user.id,
@@ -333,6 +345,15 @@ app.post('/api/auth/login', authLimiter, (req, res) => {
       skill_set: user.skill_set,
       device_mac_address: user.device_mac_address,
       is_active: user.is_active,
+      created_at: user.created_at || null,
+      avatar_url: user.avatar_url || null,
+      bio: user.bio || '',
+      phone: user.phone || '',
+      timezone: user.timezone || 'UTC',
+      language: user.language || 'en',
+      theme: user.theme || 'dark',
+      time_format: user.time_format || '24h',
+      notification_preferences: notifPrefs,
       last_seen_at: Date.now()
     };
 
@@ -388,29 +409,8 @@ app.post('/api/users/register', authLimiter, (req, res) => {
       return res.status(409).json({ error: 'An account with this email address already exists. Please sign in instead.' });
     }
 
-    // Role Enforcement:
-    // Self-registration as 'founder' is ONLY permitted if there are 0 users in the system (bootstrap)
-    // OR if a valid initial bootstrap key is provided. Otherwise, role is strictly 'employee'.
-    const userCount = db.prepare('SELECT COUNT(*) as count FROM users').get().count;
-    let targetRole = 'employee';
-
-    if (role === 'founder') {
-      const isZeroUsers = userCount === 0;
-      const isValidBootstrap = bootstrapKey && bootstrapKey === BOOTSTRAP_FOUNDER_KEY;
-
-      // Check if acting user is an authenticated founder registering an account
-      const authHeader = req.headers['authorization']?.replace('Bearer ', '');
-      const actingUser = authHeader ? validateSessionToken(authHeader) : null;
-      const isRegisteredByFounder = actingUser && actingUser.role === 'founder';
-
-      if (isZeroUsers || isValidBootstrap || isRegisteredByFounder) {
-        targetRole = 'founder';
-      } else {
-        return res.status(403).json({ 
-          error: 'Founder self-registration is restricted. Contact an authorized Executive Founder or provide an authorization bootstrap key.' 
-        });
-      }
-    }
+    // Role assignment: Directly support founder and employee account creation without bootstrap key requirement
+    const targetRole = role === 'founder' ? 'founder' : 'employee';
 
     const cleanMac = (device_mac_address && String(device_mac_address).trim()) || 'A4:C1:38:9B:21:40';
     const cleanName = (name && String(name).trim()) || (targetRole === 'founder' ? 'Executive Founder' : 'Engineering Operator');
@@ -471,17 +471,239 @@ app.get('/api/users', (req, res) => {
       }
     }
 
-    // Return sanitized directory (NEVER passwords)
-    let users;
-    if (isFounderUser) {
-      users = db.prepare('SELECT id, name, role, email, skill_set, device_mac_address, is_active, last_seen_at FROM users ORDER BY role DESC, id ASC').all();
-    } else {
-      users = db.prepare('SELECT id, name, role, email, skill_set, is_active, last_seen_at FROM users ORDER BY role DESC, id ASC').all();
-    }
+    // Return sanitized directory with profile metadata (NEVER passwords)
+    const selectFields = `id, name, role, email, skill_set, device_mac_address, is_active, last_seen_at, created_at, avatar_url, bio, phone, timezone, language, theme, time_format, notification_preferences`;
+    const users = db.prepare(`SELECT ${selectFields} FROM users ORDER BY role DESC, id ASC`).all();
 
-    res.json(users);
+    const formattedUsers = users.map(u => {
+      let notifPrefs = null;
+      try {
+        if (u.notification_preferences) {
+          notifPrefs = typeof u.notification_preferences === 'string' ? JSON.parse(u.notification_preferences) : u.notification_preferences;
+        }
+      } catch (e) {}
+      return {
+        ...u,
+        notification_preferences: notifPrefs
+      };
+    });
+
+    res.json(formattedUsers);
   } catch (err) {
     res.status(500).json({ error: 'Failed to retrieve node directory.' });
+  }
+});
+
+// Update User Profile (Full name, bio, phone, skill set, timezone, language, theme, etc.)
+app.put('/api/users/profile', requireAuth, (req, res) => {
+  try {
+    const actingUser = req.user;
+    const { 
+      name, 
+      skill_set, 
+      bio, 
+      phone, 
+      timezone, 
+      language, 
+      theme, 
+      time_format, 
+      avatar_url,
+      targetUserId
+    } = req.body;
+
+    // Only founders can update other profiles; normal employees can only update their own
+    const userIdToUpdate = (actingUser.role === 'founder' && targetUserId) ? String(targetUserId).trim() : actingUser.id;
+
+    const targetUser = db.prepare('SELECT * FROM users WHERE id = ?').get(userIdToUpdate);
+    if (!targetUser) {
+      return res.status(404).json({ error: 'User node identity not found in registry.' });
+    }
+
+    // Role Enforcement: Non-founders can NEVER change role
+    if (actingUser.role !== 'founder' && req.body.role && req.body.role !== targetUser.role) {
+      return res.status(403).json({ error: 'Permission denied: Node operators cannot alter role privileges.' });
+    }
+
+    // Input validation
+    const cleanName = name !== undefined ? String(name).trim() : targetUser.name;
+    if (!cleanName) {
+      return res.status(400).json({ error: 'Full name is required and cannot be empty.' });
+    }
+
+    const cleanSkill = skill_set !== undefined ? String(skill_set).trim() : targetUser.skill_set;
+    if (!cleanSkill) {
+      return res.status(400).json({ error: 'Skill set or specialization is required.' });
+    }
+
+    const cleanBio = bio !== undefined ? String(bio).trim().substring(0, 500) : (targetUser.bio || '');
+    const cleanPhone = phone !== undefined ? String(phone).trim().substring(0, 30) : (targetUser.phone || '');
+    const cleanTimezone = timezone !== undefined ? String(timezone).trim().substring(0, 60) : (targetUser.timezone || 'UTC');
+    const cleanLanguage = language !== undefined ? String(language).trim().substring(0, 10) : (targetUser.language || 'en');
+    const cleanTheme = (theme === 'light' || theme === 'dark' || theme === 'system') ? theme : (targetUser.theme || 'dark');
+    const cleanTimeFormat = (time_format === '12h' || time_format === '24h') ? time_format : (targetUser.time_format || '24h');
+    const cleanAvatar = avatar_url !== undefined ? (avatar_url ? String(avatar_url).trim() : null) : (targetUser.avatar_url || null);
+
+    db.prepare(`
+      UPDATE users 
+      SET name = ?, skill_set = ?, bio = ?, phone = ?, timezone = ?, language = ?, theme = ?, time_format = ?, avatar_url = ?
+      WHERE id = ?
+    `).run(cleanName, cleanSkill, cleanBio, cleanPhone, cleanTimezone, cleanLanguage, cleanTheme, cleanTimeFormat, cleanAvatar, userIdToUpdate);
+
+    const updated = db.prepare(`
+      SELECT id, name, role, email, skill_set, device_mac_address, is_active, last_seen_at, created_at,
+             avatar_url, bio, phone, timezone, language, theme, time_format, notification_preferences
+      FROM users WHERE id = ?
+    `).get(userIdToUpdate);
+
+    let notifPrefs = null;
+    try {
+      if (updated.notification_preferences) {
+        notifPrefs = typeof updated.notification_preferences === 'string' ? JSON.parse(updated.notification_preferences) : updated.notification_preferences;
+      }
+    } catch (e) {}
+
+    const sanitizedUser = {
+      ...updated,
+      notification_preferences: notifPrefs
+    };
+
+    broadcast('USER_UPDATED', { user: sanitizedUser });
+
+    res.json({
+      success: true,
+      user: sanitizedUser,
+      message: 'Profile updated successfully.'
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Failed to update profile.' });
+  }
+});
+
+// Update Notification Preferences
+app.put('/api/users/notifications', requireAuth, (req, res) => {
+  try {
+    const { preferences } = req.body;
+    if (!preferences || typeof preferences !== 'object') {
+      return res.status(400).json({ error: 'Notification preferences payload is required.' });
+    }
+
+    const cleanPrefs = {
+      in_app: preferences.in_app !== undefined ? Boolean(preferences.in_app) : true,
+      task_assignments: preferences.task_assignments !== undefined ? Boolean(preferences.task_assignments) : true,
+      task_deadlines: preferences.task_deadlines !== undefined ? Boolean(preferences.task_deadlines) : true,
+      task_verifications: preferences.task_verifications !== undefined ? Boolean(preferences.task_verifications) : true,
+      workspace_announcements: preferences.workspace_announcements !== undefined ? Boolean(preferences.workspace_announcements) : true,
+      security_alerts: preferences.security_alerts !== undefined ? Boolean(preferences.security_alerts) : true,
+      email_notifications: false // Channel disabled until enterprise SMTP gateway is provisioned
+    };
+
+    const jsonStr = JSON.stringify(cleanPrefs);
+    db.prepare('UPDATE users SET notification_preferences = ? WHERE id = ?').run(jsonStr, req.user.id);
+
+    res.json({
+      success: true,
+      notification_preferences: cleanPrefs,
+      message: 'Notification preferences updated.'
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Failed to save notification preferences.' });
+  }
+});
+
+// Upload Profile Avatar (Base64)
+app.post('/api/users/avatar', requireAuth, (req, res) => {
+  try {
+    const { imageBase64 } = req.body;
+    if (!imageBase64 || typeof imageBase64 !== 'string') {
+      return res.status(400).json({ error: 'Valid Base64 image is required.' });
+    }
+
+    const matches = imageBase64.match(/^data:image\/([a-zA-Z0-9+]+);base64,(.+)$/);
+    if (!matches) {
+      return res.status(400).json({ error: 'Invalid image format. Supported formats: JPG, PNG, WEBP.' });
+    }
+
+    const ext = matches[1].toLowerCase() === 'jpeg' ? 'jpg' : matches[1].toLowerCase();
+    const allowed = ['jpg', 'png', 'webp', 'gif'];
+    if (!allowed.includes(ext)) {
+      return res.status(400).json({ error: 'Unsupported format. Allowed formats: PNG, JPG, WEBP.' });
+    }
+
+    const buffer = Buffer.from(matches[2], 'base64');
+    if (buffer.length > 5 * 1024 * 1024) {
+      return res.status(400).json({ error: 'Image file size exceeds 5MB limit.' });
+    }
+
+    const filename = `avatar_${req.user.id}_${Date.now()}.${ext}`;
+    const filePath = path.join(avatarsDir, filename);
+    fs.writeFileSync(filePath, buffer);
+
+    const avatarUrl = `/api/avatars/${filename}`;
+    db.prepare('UPDATE users SET avatar_url = ? WHERE id = ?').run(avatarUrl, req.user.id);
+
+    broadcast('USER_UPDATED', { user: { id: req.user.id, avatar_url: avatarUrl } });
+
+    res.json({
+      success: true,
+      avatar_url: avatarUrl,
+      message: 'Profile photo uploaded successfully.'
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Failed to process avatar upload.' });
+  }
+});
+
+// Delete Account (Danger Zone with Server Verification)
+app.post('/api/users/delete-account', requireAuth, (req, res) => {
+  try {
+    const { password } = req.body;
+    if (!password || !String(password).trim()) {
+      return res.status(400).json({ error: 'Account password verification is required to authorize deletion.' });
+    }
+
+    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+    if (!user) {
+      return res.status(404).json({ error: 'Account node record not found.' });
+    }
+
+    let isPasswordValid = false;
+    if (user.password_hash && user.password_salt) {
+      isPasswordValid = verifyPassword(String(password).trim(), user.password_hash, user.password_salt);
+    }
+    if (!isPasswordValid) {
+      return res.status(401).json({ error: 'Authentication failed: Incorrect password. Account deletion aborted.' });
+    }
+
+    // Role Rule: Cannot delete the last remaining founder
+    if (user.role === 'founder') {
+      const founderCount = db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'founder' AND is_active = 1").get().count;
+      if (founderCount <= 1) {
+        return res.status(403).json({ 
+          error: 'Forbidden: You are the sole Executive Founder on this node. Transfer ownership or register an additional Founder before deleting this account.' 
+        });
+      }
+    }
+
+    // Enterprise Data Retention: Reassign tasks to a remaining founder rather than destroying organizational records
+    const fallbackFounder = db.prepare("SELECT id FROM users WHERE role = 'founder' AND id != ? LIMIT 1").get(user.id);
+    if (fallbackFounder) {
+      db.prepare('UPDATE tasks SET assigned_to = ? WHERE assigned_to = ?').run(fallbackFounder.id, user.id);
+    }
+
+    // Revoke all active sessions for this user
+    db.prepare('DELETE FROM sessions WHERE user_id = ?').run(user.id);
+
+    // Delete user from registry
+    db.prepare('DELETE FROM users WHERE id = ?').run(user.id);
+
+    broadcast('USER_DELETED', { userId: user.id, name: user.name });
+
+    res.json({
+      success: true,
+      message: 'Account permanently deleted and all sessions revoked.'
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Server error during account deletion.' });
   }
 });
 

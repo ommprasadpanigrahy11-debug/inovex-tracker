@@ -17,9 +17,11 @@ import {
   UserCheck, 
   Database,
   LogOut,
-  FileText
+  FileText,
+  User
 } from 'lucide-react';
 import { isSupabaseConfigured } from '../lib/supabase';
+import { ProfileMenu } from './ProfileMenu';
 
 export function SidebarNav({ 
   currentUser, 
@@ -54,9 +56,11 @@ export function SidebarNav({
     { id: 'dashboard', label: 'Orchestration Grid', icon: LayoutGrid },
     { id: 'audits', label: 'Video Audits & AI', icon: Video },
     { id: 'telemetry', label: 'Health Telemetry', icon: Activity },
+    { id: 'profile', label: 'Profile & Settings', icon: User }
   ] : [
     { id: 'workspace', label: 'Sprint Workspace', icon: Clock },
     { id: 'sentinel', label: 'Screen Sentinel', icon: Shield },
+    { id: 'profile', label: 'Profile & Settings', icon: User }
   ];
 
   return (
@@ -82,18 +86,16 @@ export function SidebarNav({
             {canInstallPwa && <span className="mobile-dot"></span>}
           </button>
 
-          {/* Disconnect / Logout button on mobile */}
-          {onLogout && (
-            <button 
-              className="mobile-menu-toggle"
-              onClick={onLogout}
-              title="Disconnect Node"
-              aria-label="Disconnect Node"
-              style={{ width: '38px', height: '38px' }}
-            >
-              <LogOut size={16} />
-            </button>
-          )}
+          {/* Profile Menu Dropdown trigger on Mobile */}
+          <ProfileMenu 
+            currentUser={currentUser}
+            onNavigate={(tab, section) => {
+              if (onTabChange) onTabChange(tab, section);
+              setMobileMenuOpen(false);
+            }}
+            onLogout={onLogout}
+            align="right"
+          />
 
           {/* Mobile Menu Hamburger */}
           <button 
@@ -134,10 +136,24 @@ export function SidebarNav({
           {/* 2. ACTIVE NODE IDENTITY CARD */}
           <div className="sidebar-identity-card">
             <div className="identity-header">
-              <div className="identity-avatar">
-                {currentUser?.name ? currentUser.name.split(' ').map(n => n[0]).join('') : 'U'}
-              </div>
-              <div className="identity-details">
+              <ProfileMenu 
+                currentUser={currentUser}
+                onNavigate={(tab, section) => {
+                  if (onTabChange) onTabChange(tab, section);
+                  setMobileMenuOpen(false);
+                }}
+                onLogout={onLogout}
+                align="left"
+              />
+              <div 
+                className="identity-details"
+                onClick={() => {
+                  if (onTabChange) onTabChange('profile', 'overview');
+                  setMobileMenuOpen(false);
+                }}
+                style={{ cursor: 'pointer' }}
+                title="View Node Profile"
+              >
                 <span className="identity-name">{currentUser?.name}</span>
                 <span className="identity-mac mono">{currentUser?.device_mac_address}</span>
               </div>
@@ -163,8 +179,11 @@ export function SidebarNav({
               <button
                 type="button"
                 className="sidebar-switch-node-btn"
-                onClick={onLogout}
-                title="Switch to another user account (requires credentials)"
+                onClick={() => {
+                  if (onTabChange) onTabChange('profile', 'settings');
+                  setMobileMenuOpen(false);
+                }}
+                title="Account Settings & Preferences"
                 style={{
                   background: 'transparent',
                   border: '1px solid var(--line)',
@@ -178,7 +197,7 @@ export function SidebarNav({
                   gap: '4px'
                 }}
               >
-                <span>Switch Node</span>
+                <span>Settings</span>
               </button>
             </div>
           </div>

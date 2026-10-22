@@ -51,6 +51,15 @@ export function generateMacAddress() {
   return mac;
 }
 
+export function getStoredUser() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.USER);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    return null;
+  }
+}
+
 export function formatUserFromDb(u) {
   if (!u) return u;
   let name = u.name || '';
@@ -62,11 +71,41 @@ export function formatUserFromDb(u) {
       skill_set = match[2].trim();
     }
   }
+
+  let notifPrefs = {
+    in_app: true,
+    task_assignments: true,
+    task_deadlines: true,
+    task_verifications: true,
+    workspace_announcements: true,
+    security_alerts: true,
+    email_notifications: false
+  };
+
+  if (u.notification_preferences) {
+    try {
+      if (typeof u.notification_preferences === 'string') {
+        notifPrefs = { ...notifPrefs, ...JSON.parse(u.notification_preferences) };
+      } else if (typeof u.notification_preferences === 'object') {
+        notifPrefs = { ...notifPrefs, ...u.notification_preferences };
+      }
+    } catch (e) {}
+  }
+
   return {
     ...u,
     name,
-    skill_set: skill_set || (u.role === 'founder' ? 'Executive Founder' : 'Engineering Operator'),
+    skill_set: skill_set || (u.role === 'founder' ? 'Executive Director' : 'Engineering Operator'),
+    avatar_url: u.avatar_url || null,
+    bio: u.bio || '',
+    phone: u.phone || '',
+    timezone: u.timezone || 'UTC',
+    language: u.language || 'en',
+    theme: u.theme || 'dark',
+    time_format: u.time_format || '24h',
+    notification_preferences: notifPrefs,
     is_active: u.is_active ?? 1,
+    created_at: u.created_at || null,
     last_seen_at: u.last_seen_at ?? u.created_at ?? null
   };
 }
@@ -218,9 +257,197 @@ export async function logoutUser() {
 }
 
 /**
+ * Update user personal profile
+ */
+export async function updateUserProfile(profileData) {
+  // 1. Try Backend API
+  if (!isStaticCloudOnly) {
+    try {
+      const res = await fetch(getApiUrl('/api/users/profile'), {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(profileData)
+      });
+
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        const data = await res.json();
+        if (res.ok && data.success) {
+          const formatted = formatUserFromDb(data.user);
+          try {
+            localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(formatted));
+          } catch (e) {}
+          return { success: true, user: formatted, message: data.message };
+        } else {
+          throw new Error(data.error || 'Failed to update profile.');
+        }
+      }
+    } catch (err) {
+      if (err.message && (err.message.includes('required') || err.message.includes('Permission') || err.message.includes('Security'))) {
+        throw err;
+      }
+      console.warn('[Backend profile update failed; falling back to direct cloud]', err);
+    }
+  }
+
+  // 2. Direct Supabase Fallback
+  if (isSupabaseConfigured && supabase) {
+    const cachedUser = getStoredUser();
+    const targetId = cachedUser?.id;
+    if (!targetId) throw new Error('No active user identity found to update.');
+
+    const updatePayload = {
+      name: profileData.name,
+      skill_set: profileData.skill_set
+    };
+    if (profileData.avatar_url !== undefined) updatePayload.avatar_url = profileData.avatar_url;
+    if (profileData.bio !== undefined) updatePayload.bio = profileData.bio;
+    if (profileData.phone !== undefined) updatePayload.phone = profileData.phone;
+    if (profileData.timezone !== undefined) updatePayload.timezone = profileData.timezone;
+    if (profileData.language !== undefined) updatePayload.language = profileData.language;
+    if (profileData.theme !== undefined) updatePayload.theme = profileData.theme;
+    if (profileData.time_format !== undefined) updatePayload.time_format = profileData.time_format;
+
+    const { data, error } = await supabase
+      .from('users')
+      .update(updatePayload)
+      .eq('id', targetId)
+      .select();
+
+    if (error) throw new Error(error.message || 'Cloud update failed.');
+    const updated = formatUserFromDb(data && data[0] ? data[0] : { ...cachedUser, ...updatePayload });
+    try {
+      localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(updated));
+    } catch (e) {}
+    return { success: true, user: updated, message: 'Profile updated in cloud.' };
+  }
+
+  // 3. Local state fallback
+  const cachedUser = getStoredUser();
+  const updated = formatUserFromDb({ ...cachedUser, ...profileData });
+  try {
+    localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(updated));
+  } catch (e) {}
+  return { success: true, user: updated, message: 'Profile updated.' };
+}
+
+/**
+ * Update user notification preferences
+ */
+export async function updateNotificationPreferences(preferences) {
+  if (!isStaticCloudOnly) {
+    try {
+      const res = await fetch(getApiUrl('/api/users/notifications'), {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ preferences })
+      });
+
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        const data = await res.json();
+        if (res.ok && data.success) {
+          const cached = getStoredUser();
+          if (cached) {
+            cached.notification_preferences = data.notification_preferences;
+            try {
+              localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(cached));
+            } catch (e) {}
+          }
+          return { success: true, notification_preferences: data.notification_preferences };
+        } else {
+          throw new Error(data.error || 'Failed to save notifications.');
+        }
+      }
+    } catch (err) {
+      console.warn('[Notification API failed, updating local state]', err);
+    }
+  }
+
+  const cached = getStoredUser();
+  if (cached) {
+    cached.notification_preferences = preferences;
+    try {
+      localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(cached));
+    } catch (e) {}
+  }
+  return { success: true, notification_preferences: preferences };
+}
+
+/**
+ * Upload Avatar photo
+ */
+export async function uploadAvatarPhoto(base64Data) {
+  if (!isStaticCloudOnly) {
+    try {
+      const res = await fetch(getApiUrl('/api/users/avatar'), {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ imageBase64: base64Data })
+      });
+
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        const data = await res.json();
+        if (res.ok && data.success) {
+          return { success: true, avatar_url: data.avatar_url };
+        } else {
+          throw new Error(data.error || 'Failed to upload avatar photo.');
+        }
+      }
+    } catch (err) {
+      if (err.message) throw err;
+    }
+  }
+  return { success: true, avatar_url: base64Data };
+}
+
+/**
+ * Delete User Account permanently (Danger Zone)
+ */
+export async function deleteUserAccount({ password }) {
+  if (!password || !password.trim()) {
+    throw new Error('Account password verification is required.');
+  }
+
+  if (!isStaticCloudOnly) {
+    const res = await fetch(getApiUrl('/api/users/delete-account'), {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ password: password.trim() })
+    });
+
+    const contentType = res.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      const data = await res.json();
+      if (res.ok && data.success) {
+        await logoutUser();
+        return { success: true, message: data.message };
+      } else {
+        throw new Error(data.error || 'Failed to delete account.');
+      }
+    } else {
+      throw new Error(`Server returned error status ${res.status}`);
+    }
+  }
+
+  // Direct Cloud Fallback
+  if (isSupabaseConfigured && supabase) {
+    const cachedUser = getStoredUser();
+    if (!cachedUser) throw new Error('No active user identity.');
+    const { error } = await supabase.from('users').delete().eq('id', cachedUser.id);
+    if (error) throw new Error(error.message);
+    await logoutUser();
+    return { success: true, message: 'Account deleted.' };
+  }
+
+  throw new Error('Cannot reach verification server to authorize deletion.');
+}
+
+/**
  * Register a new node identity via Backend API or direct Cloud Fallback
  */
-export async function registerUser({ name, email, password, role = 'employee', skill_set, device_mac_address, bootstrapKey = null }) {
+export async function registerUser({ name, email, password, role = 'employee', skill_set, device_mac_address }) {
   const cleanEmail = email ? String(email).trim().toLowerCase() : '';
   const cleanName = name ? String(name).trim() : (role === 'founder' ? 'Executive Founder' : 'Engineering Operator');
   const cleanSkill = skill_set ? String(skill_set).trim() : (role === 'founder' ? 'Executive Founder' : 'Engineering Operator');
@@ -240,8 +467,7 @@ export async function registerUser({ name, email, password, role = 'employee', s
           password: cleanPass,
           role,
           skill_set: cleanSkill,
-          device_mac_address: mac,
-          bootstrapKey
+          device_mac_address: mac
         })
       });
 
@@ -279,16 +505,6 @@ export async function registerUser({ name, email, password, role = 'employee', s
 
     if (existing && existing.length > 0) {
       throw new Error('An authorized node with this email address already exists. Please sign in instead.');
-    }
-
-    // Protect founder registration (permitted if 0 users exist as initial setup)
-    if (role === 'founder') {
-      const { data: allUsers } = await supabase.from('users').select('id').limit(1);
-      const isZeroUsers = !allUsers || allUsers.length === 0;
-      const validKey = import.meta.env.VITE_FOUNDER_BOOTSTRAP_KEY || 'INOVEX-FOUNDER-BOOTSTRAP-2026';
-      if (!isZeroUsers && (!bootstrapKey || bootstrapKey.trim() !== validKey)) {
-        throw new Error('Founder registration requires valid system bootstrap authorization key.');
-      }
     }
 
     const newRecord = {

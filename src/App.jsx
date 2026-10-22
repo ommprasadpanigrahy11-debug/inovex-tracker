@@ -3,11 +3,13 @@ import { SidebarNav } from './components/SidebarNav';
 import { AdminDashboard } from './components/AdminDashboard';
 import { EmployeeWorkspace } from './components/EmployeeWorkspace';
 import { FounderEmployeeView } from './components/FounderEmployeeView';
+import { ProfileManager } from './components/ProfileManager';
 import { InstallAppModal } from './components/InstallAppModal';
 import { LoginGateway } from './components/LoginGateway';
 import { AlertTriangle, X, ShieldAlert } from 'lucide-react';
 import { fetchUsers, simulateHardwareSpoof, verifyStoredSession, logoutUser, getAuthToken } from './lib/dataService';
 import { isSupabaseConfigured, initRealtimeChannel } from './lib/supabase';
+import { applyTheme, initThemeListener, getSavedTheme } from './lib/theme';
 
 export function App() {
   const [users, setUsers] = useState([]);
@@ -16,6 +18,7 @@ export function App() {
   const [wsConnected, setWsConnected] = useState(false);
   const [lastWsEvent, setLastWsEvent] = useState(null);
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [profileSection, setProfileSection] = useState('overview');
   const [inspectedEmployee, setInspectedEmployee] = useState(null);
 
   // PWA & Android Installation State
@@ -111,9 +114,16 @@ export function App() {
     }
   };
 
-  // Sync activeTab when user switches
+  // Initialize & synchronize theme
   useEffect(() => {
-    if (currentUser) {
+    applyTheme(currentUser?.theme || getSavedTheme());
+    const cleanup = initThemeListener();
+    return cleanup;
+  }, [currentUser?.theme]);
+
+  // Sync activeTab when user switches role
+  useEffect(() => {
+    if (currentUser && activeTab !== 'profile') {
       setActiveTab(currentUser.role === 'founder' ? 'dashboard' : 'workspace');
     }
   }, [currentUser?.role]);
@@ -250,8 +260,9 @@ export function App() {
         onOpenInstallModal={() => setInstallModalOpen(true)}
         canInstallPwa={canInstallPwa}
         activeTab={activeTab}
-        onTabChange={(tab) => {
+        onTabChange={(tab, section) => {
           setActiveTab(tab);
+          if (section) setProfileSection(section);
           setInspectedEmployee(null);
         }}
         onLogout={() => {
@@ -297,8 +308,23 @@ export function App() {
           ))}
         </div>
 
-        {/* Dynamic View Routing Based on Role */}
-        {isFounder ? (
+        {/* Dynamic View Routing: Profile Manager, Founder Dashboard, or Employee Workspace */}
+        {activeTab === 'profile' ? (
+          <ProfileManager 
+            currentUser={currentUser}
+            onUpdateUser={(updatedUser) => {
+              setCurrentUser(updatedUser);
+              setUsers(prev => prev.map(u => u.id === updatedUser.id ? updatedUser : u));
+            }}
+            onLogout={handleLogout}
+            onNavigate={(tab, section) => {
+              setActiveTab(tab);
+              if (section) setProfileSection(section);
+              setInspectedEmployee(null);
+            }}
+            initialSection={profileSection}
+          />
+        ) : isFounder ? (
           inspectedEmployee ? (
             <FounderEmployeeView 
               currentUser={currentUser}

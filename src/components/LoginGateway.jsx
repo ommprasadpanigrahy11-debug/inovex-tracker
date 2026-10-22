@@ -32,7 +32,6 @@ export function LoginGateway({ users = [], onLogin }) {
   const [regSkillSet, setRegSkillSet] = useState('');
   const [regMac, setRegMac] = useState(generateMacAddress());
   const [regPassword, setRegPassword] = useState('');
-  const [regBootstrapKey, setRegBootstrapKey] = useState('');
 
   const [isLoading, setIsLoading] = useState(false);
   const [authStep, setAuthStep] = useState('');
@@ -106,7 +105,6 @@ export function LoginGateway({ users = [], onLogin }) {
     const skillSet = regSkillSet.trim();
     const pass = regPassword.trim();
     const mac = regMac.trim() || generateMacAddress();
-    const bootstrap = regBootstrapKey.trim();
 
     if (!name) {
       setErrorMsg('Please enter your full name.');
@@ -139,8 +137,7 @@ export function LoginGateway({ users = [], onLogin }) {
         password: pass,
         role: selectedRole,
         skill_set: skillSet,
-        device_mac_address: mac,
-        bootstrapKey: bootstrap || null
+        device_mac_address: mac
       });
 
       if (res && res.success && res.user) {
@@ -425,34 +422,6 @@ export function LoginGateway({ users = [], onLogin }) {
                   autoComplete="new-password"
                 />
               </div>
-
-              {/* Founder Bootstrap Key (Required for Founder role if system already has accounts) */}
-              {selectedRole === 'founder' && users.length > 0 && (
-                <div className="login-input-group">
-                  <label className="login-label" htmlFor="reg-bootstrap-input">
-                    <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                      <Key size={12} style={{ color: 'var(--status-amber)' }} />
-                      <span>Founder Authorization Key</span>
-                    </span>
-                    <span className="mono" style={{ fontSize: '10px', color: 'var(--muted)' }}>
-                      Restricted Access
-                    </span>
-                  </label>
-                  <input
-                    type="password"
-                    id="reg-bootstrap-input"
-                    className="dispatch-textarea"
-                    style={{ height: '42px', padding: '10px 14px', resize: 'none' }}
-                    placeholder="Enter system founder bootstrap token..."
-                    value={regBootstrapKey}
-                    onChange={(e) => setRegBootstrapKey(e.target.value)}
-                    disabled={isLoading}
-                  />
-                  <div style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '3px' }}>
-                    Executive Founder creation is guarded. Enter the environment bootstrap key or have an existing Founder create your account.
-                  </div>
-                </div>
-              )}
 
               <div className="login-input-group">
                 <label className="login-label" htmlFor="reg-mac-input">

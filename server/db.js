@@ -125,6 +125,14 @@ try { db.exec('ALTER TABLE users ADD COLUMN password_salt TEXT;'); } catch (e) {
 try { db.exec('ALTER TABLE users ADD COLUMN skill_set TEXT;'); } catch (e) {}
 try { db.exec('ALTER TABLE users ADD COLUMN last_seen_at INTEGER;'); } catch (e) {}
 try { db.exec('ALTER TABLE users ADD COLUMN created_at INTEGER DEFAULT 0;'); } catch (e) {}
+try { db.exec('ALTER TABLE users ADD COLUMN avatar_url TEXT;'); } catch (e) {}
+try { db.exec('ALTER TABLE users ADD COLUMN bio TEXT;'); } catch (e) {}
+try { db.exec('ALTER TABLE users ADD COLUMN phone TEXT;'); } catch (e) {}
+try { db.exec('ALTER TABLE users ADD COLUMN timezone TEXT DEFAULT "UTC";'); } catch (e) {}
+try { db.exec('ALTER TABLE users ADD COLUMN language TEXT DEFAULT "en";'); } catch (e) {}
+try { db.exec('ALTER TABLE users ADD COLUMN theme TEXT DEFAULT "dark";'); } catch (e) {}
+try { db.exec('ALTER TABLE users ADD COLUMN time_format TEXT DEFAULT "24h";'); } catch (e) {}
+try { db.exec('ALTER TABLE users ADD COLUMN notification_preferences TEXT;'); } catch (e) {}
 
 // Sessions table for secure token authentication and revocation
 db.exec(`
@@ -147,42 +155,45 @@ function hashPasswordInternal(password, salt) {
 }
 
 // Ensure default users have passwords, emails, and skill sets with secure hashes
-try {
-  const usersToUpdate = [
-    { id: 'usr_fnd_01', name: 'Sarah Vance', pass: '9901', email: 'sarah.vance@lexven.com', skill: 'CEO / Founder' },
-    { id: 'usr_fnd_02', name: 'David Chen', pass: '9901', email: 'david.chen@lexven.com', skill: 'CTO / Founder' },
-    { id: 'usr_emp_01', name: 'Alex Mercer', pass: '1042', email: 'alex.mercer@lexven.com', skill: 'Agentic Eng' },
-    { id: 'usr_emp_02', name: 'Elena Rostova', pass: '1042', email: 'elena.rostova@lexven.com', skill: 'Pipeline Eng' },
-    { id: 'usr_emp_03', name: 'Marcus Brody', pass: '1042', email: 'marcus.brody@lexven.com', skill: 'Telemetry Systems' },
-    { id: 'usr_emp_04', name: 'Sophia Lindqvist', pass: '1042', email: 'sophia.lindqvist@lexven.com', skill: 'Model Ops' }
-  ];
+export function syncDefaultUsersWithHashes() {
+  try {
+    const usersToUpdate = [
+      { id: 'usr_fnd_01', name: 'Sarah Vance', pass: '9901', email: 'sarah.vance@lexven.com', skill: 'Executive Director' },
+      { id: 'usr_fnd_02', name: 'David Chen', pass: '9901', email: 'david.chen@lexven.com', skill: 'Executive Director' },
+      { id: 'usr_emp_01', name: 'Alex Mercer', pass: '1042', email: 'alex.mercer@lexven.com', skill: 'Agentic Eng' },
+      { id: 'usr_emp_02', name: 'Elena Rostova', pass: '1042', email: 'elena.rostova@lexven.com', skill: 'Pipeline Eng' },
+      { id: 'usr_emp_03', name: 'Marcus Brody', pass: '1042', email: 'marcus.brody@lexven.com', skill: 'Telemetry Systems' },
+      { id: 'usr_emp_04', name: 'Sophia Lindqvist', pass: '1042', email: 'sophia.lindqvist@lexven.com', skill: 'Model Ops' }
+    ];
 
-  for (const u of usersToUpdate) {
-    const existing = db.prepare('SELECT id, password, password_hash, password_salt FROM users WHERE id = ?').get(u.id);
-    if (existing) {
-      if (!existing.password_hash) {
-        const salt = crypto.randomBytes(16).toString('hex');
-        const plainToHash = existing.password || u.pass;
-        const hash = hashPasswordInternal(plainToHash, salt);
-        db.prepare(`
-          UPDATE users 
-          SET name = ?, password_hash = ?, password_salt = ?, password = NULL, email = COALESCE(email, ?), skill_set = COALESCE(skill_set, ?)
-          WHERE id = ?
-        `).run(u.name, hash, salt, u.email, u.skill, u.id);
+    for (const u of usersToUpdate) {
+      const existing = db.prepare('SELECT id, password, password_hash, password_salt FROM users WHERE id = ?').get(u.id);
+      if (existing) {
+        if (!existing.password_hash) {
+          const salt = crypto.randomBytes(16).toString('hex');
+          const plainToHash = existing.password || u.pass;
+          const hash = hashPasswordInternal(plainToHash, salt);
+          db.prepare(`
+            UPDATE users 
+            SET name = ?, password_hash = ?, password_salt = ?, password = NULL, email = COALESCE(email, ?), skill_set = COALESCE(skill_set, ?)
+            WHERE id = ?
+          `).run(u.name, hash, salt, u.email, u.skill, u.id);
+        }
       }
     }
-  }
 
-  // Also migrate any user who has a plaintext password but no password_hash
-  const allUsersWithPlaintext = db.prepare("SELECT id, password FROM users WHERE password IS NOT NULL AND (password_hash IS NULL OR password_hash = '')").all();
-  for (const u of allUsersWithPlaintext) {
-    const salt = crypto.randomBytes(16).toString('hex');
-    const hash = hashPasswordInternal(u.password, salt);
-    db.prepare('UPDATE users SET password_hash = ?, password_salt = ?, password = NULL WHERE id = ?').run(hash, salt, u.id);
+    // Also migrate any user who has a plaintext password but no password_hash
+    const allUsersWithPlaintext = db.prepare("SELECT id, password FROM users WHERE password IS NOT NULL AND (password_hash IS NULL OR password_hash = '')").all();
+    for (const u of allUsersWithPlaintext) {
+      const salt = crypto.randomBytes(16).toString('hex');
+      const hash = hashPasswordInternal(u.password, salt);
+      db.prepare('UPDATE users SET password_hash = ?, password_salt = ?, password = NULL WHERE id = ?').run(hash, salt, u.id);
+    }
+  } catch (e) {
+    console.warn('Password migration note:', e?.message || e);
   }
-} catch (e) {
-  console.warn('Password migration note:', e?.message || e);
 }
+syncDefaultUsersWithHashes();
 
 // Canonicalize legacy task statuses ('done' or 'completed' -> 'review')
 try {
@@ -222,11 +233,11 @@ db.exec(`
   );
 `);
 
-// Automatic Demo Seed (opt-in only via SEED_DEMO_DATA=true to keep production clean)
+// Automatic Seed if database has zero users
 const userCountStmt = db.prepare('SELECT COUNT(*) as count FROM users');
 const { count } = userCountStmt.get();
 
-if (count === 0 && process.env.SEED_DEMO_DATA === 'true') {
+if (count === 0 && process.env.SEED_DEMO_DATA !== 'false') {
   const insertUser = db.prepare(`
     INSERT INTO users (id, name, role, device_mac_address, is_active, biometric_passkey_id, biometric_enrolled)
     VALUES (?, ?, ?, ?, ?, ?, 1)
@@ -246,6 +257,7 @@ if (count === 0 && process.env.SEED_DEMO_DATA === 'true') {
   for (const u of initialUsers) {
     insertUser.run(...u);
   }
+  syncDefaultUsersWithHashes();
 
   const now = Date.now();
 

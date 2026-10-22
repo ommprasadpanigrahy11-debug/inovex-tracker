@@ -69,7 +69,10 @@ export function validateSessionToken(token) {
   const now = Date.now();
 
   const session = db.prepare(`
-    SELECT s.token, s.user_id, s.expires_at, u.id, u.name, u.role, u.email, u.skill_set, u.device_mac_address, u.is_active, u.last_seen_at
+    SELECT s.token, s.user_id, s.expires_at, 
+           u.id, u.name, u.role, u.email, u.skill_set, u.device_mac_address, 
+           u.is_active, u.last_seen_at, u.created_at,
+           u.avatar_url, u.bio, u.phone, u.timezone, u.language, u.theme, u.time_format, u.notification_preferences
     FROM sessions s
     JOIN users u ON s.user_id = u.id
     WHERE s.token = ? AND s.expires_at > ?
@@ -90,7 +93,16 @@ export function validateSessionToken(token) {
     skill_set: session.skill_set,
     device_mac_address: session.device_mac_address,
     is_active: session.is_active,
-    last_seen_at: session.last_seen_at
+    last_seen_at: session.last_seen_at,
+    created_at: session.created_at || null,
+    avatar_url: session.avatar_url || null,
+    bio: session.bio || '',
+    phone: session.phone || '',
+    timezone: session.timezone || 'UTC',
+    language: session.language || 'en',
+    theme: session.theme || 'dark',
+    time_format: session.time_format || '24h',
+    notification_preferences: session.notification_preferences ? (typeof session.notification_preferences === 'string' ? JSON.parse(session.notification_preferences) : session.notification_preferences) : null
   };
 }
 
