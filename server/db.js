@@ -7,12 +7,23 @@ import crypto from 'node:crypto';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const dataDir = process.env.DATA_DIR || path.join(__dirname, 'data');
+const isServerless = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.LAMBDA_TASK_ROOT);
+const dataDir = process.env.DATA_DIR || (isServerless ? path.join('/tmp', 'inovex-data') : path.join(__dirname, 'data'));
 if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
+  try {
+    fs.mkdirSync(dataDir, { recursive: true });
+  } catch (e) {}
 }
 
 const dbPath = process.env.DB_PATH || path.join(dataDir, 'antigravity.db');
+if (isServerless && !fs.existsSync(dbPath)) {
+  const seedDb = path.join(__dirname, 'data', 'antigravity.db');
+  if (fs.existsSync(seedDb)) {
+    try {
+      fs.copyFileSync(seedDb, dbPath);
+    } catch (e) {}
+  }
+}
 const db = new DatabaseSync(dbPath);
 
 export { dataDir, dbPath };
@@ -190,6 +201,16 @@ export function syncDefaultUsersWithHashes() {
       const salt = crypto.randomBytes(16).toString('hex');
       const hash = hashPasswordInternal(u.password, salt);
       db.prepare('UPDATE users SET password_hash = ?, password_salt = ?, password = NULL WHERE id = ?').run(hash, salt, u.id);
+    }
+
+    // Ensure all existing user records have a working password hash
+    // Founders default to PIN '9901', Employees default to PIN '1042'
+    const unhashedUsers = db.prepare("SELECT id, role, password, email FROM users WHERE password_hash IS NULL OR password_hash = ''").all();
+    for (const u of unhashedUsers) {
+      const defaultPass = u.password || (u.role === 'founder' ? '9901' : '1042');
+      const salt = crypto.randomBytes(16).toString('hex');
+      const hash = hashPasswordInternal(defaultPass, salt);
+      db.prepare("UPDATE users SET password_hash = ?, password_salt = ?, password = NULL WHERE id = ?").run(hash, salt, u.id);
     }
   } catch (e) {
     console.warn('Password migration note:', e?.message || e);

@@ -14,9 +14,62 @@ import {
   Mail,
   User,
   Sparkles,
-  Info
+  Info,
+  Eye,
+  EyeOff,
+  HelpCircle,
+  ChevronDown,
+  ChevronUp,
+  Hash,
+  Check
 } from 'lucide-react';
 import { registerUser, bootstrapFounder, loginUser, setupUserPassword, generateMacAddress } from '../lib/dataService';
+
+/**
+ * Analyzes the entered password string to provide plain-language, real-time feedback
+ */
+function getPasswordCharacteristics(pass) {
+  if (!pass) {
+    return {
+      type: 'empty',
+      label: 'Enter password or PIN',
+      length: 0,
+      isNumeric: false,
+      isCombined: false,
+      hasLetters: false,
+      hasNumbers: false,
+      hasSymbols: false,
+      isValidPin: false,
+      isValidLength: false
+    };
+  }
+
+  const isNumeric = /^[0-9]+$/.test(pass);
+  const hasLetters = /[a-zA-Z]/.test(pass);
+  const hasNumbers = /[0-9]/.test(pass);
+  const hasSymbols = /[^a-zA-Z0-9]/.test(pass);
+  const isCombined = (hasLetters && hasNumbers) || hasSymbols;
+
+  let label = 'Letters only';
+  if (isNumeric) {
+    label = pass.length === 4 ? '4-Digit Numeric PIN' : `${pass.length}-Digit Numbers Only`;
+  } else if (isCombined) {
+    label = 'Character-Combined (Letters + Numbers/Symbols)';
+  }
+
+  return {
+    type: isNumeric ? 'numeric' : (isCombined ? 'combined' : 'text'),
+    label,
+    length: pass.length,
+    isNumeric,
+    isCombined,
+    hasLetters,
+    hasNumbers,
+    hasSymbols,
+    isValidPin: isNumeric && pass.length === 4,
+    isValidLength: pass.length >= 4
+  };
+}
 
 export function LoginGateway({ users = [], onLogin }) {
   const [authMode, setAuthMode] = useState('signin');
@@ -25,12 +78,10 @@ export function LoginGateway({ users = [], onLogin }) {
   // Sign-in state
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
 
-  // Setup password state (for unhashed accounts)
-  const [setupEmail, setSetupEmail] = useState('');
-  const [setupRole, setSetupRole] = useState('employee');
-  const [setupPassword, setSetupPassword] = useState('');
-  const [setupBootstrapKey, setSetupBootstrapKey] = useState('');
+  // Guide accordion state
+  const [guideExpanded, setGuideExpanded] = useState(true);
 
   // Register state
   const [regName, setRegName] = useState('');
@@ -38,6 +89,7 @@ export function LoginGateway({ users = [], onLogin }) {
   const [regSkillSet, setRegSkillSet] = useState('');
   const [regMac, setRegMac] = useState(generateMacAddress());
   const [regPassword, setRegPassword] = useState('');
+  const [showRegPassword, setShowRegPassword] = useState(false);
   const [regBootstrapKey, setRegBootstrapKey] = useState('');
 
   const [isLoading, setIsLoading] = useState(false);
@@ -46,6 +98,16 @@ export function LoginGateway({ users = [], onLogin }) {
   const [successMsg, setSuccessMsg] = useState('');
 
   const roleUsers = users.filter(u => u.role === selectedRole);
+  const passwordStats = getPasswordCharacteristics(password);
+  const regPasswordStats = getPasswordCharacteristics(regPassword);
+
+  // Instant one-click default PIN auto-fill helper
+  const handleAutoFillPin = () => {
+    const defaultPin = selectedRole === 'founder' ? '9901' : '1042';
+    setPassword(defaultPin);
+    setErrorMsg('');
+    setSuccessMsg(`Default ${selectedRole === 'founder' ? 'Founder' : 'Engineer'} PIN (${defaultPin}) filled! Click Authenticate below to sign in.`);
+  };
 
   // AUTHENTICATE NODE
   const handleSignInSubmit = async (e) => {
@@ -57,11 +119,15 @@ export function LoginGateway({ users = [], onLogin }) {
     const trimmedPassword = password.trim();
 
     if (!trimmedEmail) {
-      setErrorMsg('Please enter your authorized node email address.');
+      setErrorMsg('Please enter your email address (e.g. alex.mercer@lexven.com).');
       return;
     }
     if (!trimmedPassword) {
-      setErrorMsg('Please enter your account password.');
+      setErrorMsg(
+        selectedRole === 'founder'
+          ? 'Please enter your password or default Founder PIN: 9901.'
+          : 'Please enter your password or default Operator PIN: 1042.'
+      );
       return;
     }
 
@@ -74,7 +140,29 @@ export function LoginGateway({ users = [], onLogin }) {
       if (!authRes || !authRes.success || !authRes.user) {
         setIsLoading(false);
         setAuthStep('');
-        setErrorMsg(authRes?.error || 'Access Denied: Invalid email or password.');
+        
+        if (authRes?.requiresSetup) {
+          // Account exists but needs an initial password
+          try {
+            const setupRes = await setupUserPassword({ email: trimmedEmail, password: trimmedPassword });
+            if (setupRes && setupRes.success && setupRes.user) {
+              setSuccessMsg('Account password initialized! Initializing workspace...');
+              setTimeout(() => {
+                onLogin(setupRes.user);
+              }, 300);
+              return;
+            }
+          } catch (err) {}
+          setErrorMsg('Initial password setup required. Please enter a password of at least 6 characters.');
+          return;
+        }
+
+        setErrorMsg(
+          authRes?.error ||
+          (selectedRole === 'founder'
+            ? 'Access Denied: Invalid email or password. Default Founder PIN is 9901.'
+            : 'Access Denied: Invalid email or password. Default Operator PIN is 1042.')
+        );
         return;
       }
 
@@ -88,15 +176,18 @@ export function LoginGateway({ users = [], onLogin }) {
     } catch (err) {
       setIsLoading(false);
       setAuthStep('');
-      setErrorMsg(err?.message || 'Authentication server unreachable. Please verify server status.');
+      setErrorMsg(err?.message || 'Authentication error. Please check your credentials and retry.');
     }
   };
 
   const handleSelectQuickNode = (user) => {
+    const isFounder = user.role === 'founder';
+    const defaultPin = isFounder ? '9901' : '1042';
     setEmail(user.email || '');
-    setPassword('');
+    setPassword(defaultPin);
+    setSelectedRole(user.role);
     setErrorMsg('');
-    setSuccessMsg(`Selected node: ${user.name}. Please enter your password to sign in.`);
+    setSuccessMsg(`Selected node: ${user.name}. Default PIN (${defaultPin}) pre-filled for convenience! Click Authenticate to enter.`);
     const passInput = document.getElementById('login-password-input');
     if (passInput) passInput.focus();
   };
@@ -118,7 +209,7 @@ export function LoginGateway({ users = [], onLogin }) {
       return;
     }
     if (!cleanEmail || !cleanEmail.includes('@')) {
-      setErrorMsg('Please enter a valid email address.');
+      setErrorMsg('Please enter a valid email address (e.g. operator@lexven.com).');
       return;
     }
     if (!skillSet) {
@@ -126,11 +217,11 @@ export function LoginGateway({ users = [], onLogin }) {
       return;
     }
     if (!pass) {
-      setErrorMsg('Please create a secure password for this node.');
+      setErrorMsg('Please create a password for this node.');
       return;
     }
     if (pass.length < 6) {
-      setErrorMsg('Password must be at least 6 characters long.');
+      setErrorMsg('Password must be at least 6 characters long (can be numbers, letters, or combined).');
       return;
     }
     if (selectedRole === 'founder' && !regBootstrapKey.trim()) {
@@ -156,7 +247,7 @@ export function LoginGateway({ users = [], onLogin }) {
             email: cleanEmail,
             password: pass,
             role: 'employee',
-            skill_set: skillSet,
+            skill_set: cleanSkillSet,
             device_mac_address: mac
           });
 
@@ -238,6 +329,95 @@ export function LoginGateway({ users = [], onLogin }) {
               </div>
             </div>
           )}
+
+          {/* ==============================================================================
+             LAYMAN'S LANGUAGE LOGIN & CREDENTIALS GUIDE (Clear, Detailed & User-Friendly)
+             ============================================================================== */}
+          <div className="login-guide-card" id="login-layman-guide">
+            <div 
+              className="login-guide-header"
+              onClick={() => setGuideExpanded(!guideExpanded)}
+              role="button"
+              tabIndex={0}
+              aria-expanded={guideExpanded}
+              aria-label="Toggle login instructions guide"
+            >
+              <div className="login-guide-title">
+                <HelpCircle size={15} style={{ color: 'var(--accent)' }} />
+                <span>Quick Layman's Login Guide & Password Rules</span>
+              </div>
+              <button 
+                type="button" 
+                className="login-guide-toggle-btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setGuideExpanded(!guideExpanded);
+                }}
+              >
+                <span>{guideExpanded ? 'Hide Guide' : 'Show Instructions'}</span>
+                {guideExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+              </button>
+            </div>
+
+            {guideExpanded && (
+              <div className="login-guide-content">
+                
+                {/* Rule 1: What type of password to enter */}
+                <div className="login-guide-item">
+                  <div className="login-guide-item-title">
+                    <Hash size={13} style={{ color: 'var(--accent)' }} />
+                    <span>What Type of Password Must You Enter?</span>
+                  </div>
+                  <div className="login-guide-item-desc">
+                    You can enter <strong>numbers only (numeric PIN)</strong>, <strong>standard words</strong>, or <strong>character-combined passwords</strong> (letters + numbers + symbols):
+                  </div>
+                  <div className="login-guide-pills">
+                    <span className="login-guide-badge founder">
+                      👑 Founder PIN: <strong>9901</strong> (Only 4 digits)
+                    </span>
+                    <span className="login-guide-badge employee">
+                      💻 Operator PIN: <strong>1042</strong> (Only 4 digits)
+                    </span>
+                    <span className="login-guide-badge rule">
+                      ✨ New Accounts: Min. 6 characters
+                    </span>
+                  </div>
+                </div>
+
+                {/* Rule 2: Minimum digits & characters */}
+                <div className="login-guide-item">
+                  <div className="login-guide-item-title">
+                    <Lock size={13} style={{ color: 'var(--accent)' }} />
+                    <span>Password Format & Length Rules (Plain English)</span>
+                  </div>
+                  <div className="login-guide-item-desc">
+                    • <strong>Existing Team Members / Demo:</strong> Enter the exact <strong>4-digit numeric PIN</strong> (<code>9901</code> for Founders or <code>1042</code> for Engineers).<br />
+                    • <strong>New Registrations:</strong> Must be <strong>at least 6 characters</strong> long. You can use numbers only (e.g. <code>123456</code>), letters only (e.g. <code>secret</code>), or a strong combination (e.g. <code>Inovex#2026</code>).<br />
+                    • <strong>Case Sensitivity:</strong> Passwords ARE case-sensitive (capital letters matter). Email addresses are not case-sensitive.
+                  </div>
+                </div>
+
+                {/* Rule 3: Quick 1-Click Access */}
+                <div className="login-guide-item" style={{ background: 'var(--bg)', padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div style={{ fontSize: '11px', color: 'var(--ink)' }}>
+                      <strong>Testing or in a hurry?</strong> Click below to auto-fill the standard PIN:
+                    </div>
+                    <button
+                      type="button"
+                      className="btn-quick-fill"
+                      onClick={handleAutoFillPin}
+                      id="btn-quick-fill-pin"
+                    >
+                      <Sparkles size={11} />
+                      <span>Auto-Fill PIN: {selectedRole === 'founder' ? '9901' : '1042'}</span>
+                    </button>
+                  </div>
+                </div>
+
+              </div>
+            )}
+          </div>
           
           {/* Role Segmented Controller */}
           <div className="login-role-selector">
@@ -278,6 +458,9 @@ export function LoginGateway({ users = [], onLogin }) {
                     <Mail size={12} style={{ color: 'var(--accent)' }} />
                     <span>Authorized Email</span>
                   </span>
+                  <span className="mono" style={{ fontSize: '10px', color: 'var(--muted)' }}>
+                    {selectedRole === 'founder' ? 'e.g. sarah.vance@lexven.com' : 'e.g. alex.mercer@lexven.com'}
+                  </span>
                 </label>
                 <input
                   type="email"
@@ -294,30 +477,66 @@ export function LoginGateway({ users = [], onLogin }) {
               </div>
 
               <div className="login-input-group">
-                <label className="login-label" htmlFor="login-password-input">
-                  <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                    <Lock size={12} style={{ color: 'var(--accent)' }} />
-                    <span>Account Password</span>
-                  </span>
-                </label>
-                <input
-                  type="password"
-                  id="login-password-input"
-                  className="dispatch-textarea"
-                  style={{ height: '42px', padding: '10px 14px', resize: 'none' }}
-                  placeholder="Enter your security password..."
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  disabled={isLoading}
-                  autoComplete="current-password"
-                  required
-                />
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <label className="login-label" htmlFor="login-password-input" style={{ marginBottom: 0 }}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                      <Lock size={12} style={{ color: 'var(--accent)' }} />
+                      <span>Account Password or PIN</span>
+                    </span>
+                  </label>
+                  <button
+                    type="button"
+                    className="btn-quick-fill"
+                    onClick={handleAutoFillPin}
+                    style={{ fontSize: '10px', padding: '2px 6px' }}
+                  >
+                    <Sparkles size={10} />
+                    <span>Fill PIN {selectedRole === 'founder' ? '9901' : '1042'}</span>
+                  </button>
+                </div>
+
+                <div className="password-input-container">
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    id="login-password-input"
+                    className="dispatch-textarea password-input-field"
+                    style={{ height: '42px', padding: '10px 14px', resize: 'none' }}
+                    placeholder={selectedRole === 'founder' ? 'Enter 4-digit PIN 9901 or password...' : 'Enter 4-digit PIN 1042 or password...'}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    disabled={isLoading}
+                    autoComplete="current-password"
+                    required
+                  />
+                  <button
+                    type="button"
+                    className="password-toggle-btn"
+                    onClick={() => setShowPassword(!showPassword)}
+                    title={showPassword ? 'Hide password characters' : 'Show password characters'}
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  >
+                    {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+                  </button>
+                </div>
+
+                {/* Real-time Password Format & Character Feedback Pill */}
+                {password.length > 0 && (
+                  <div className="password-live-feedback">
+                    <span style={{ color: 'var(--ink)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      {passwordStats.isValidPin ? <Check size={12} style={{ color: 'var(--status-green)' }} /> : <Info size={12} style={{ color: 'var(--accent)' }} />}
+                      <span>Format: <strong>{passwordStats.label}</strong></span>
+                    </span>
+                    <span className="mono" style={{ color: passwordStats.isValidLength ? 'var(--status-green)' : 'var(--muted)' }}>
+                      {password.length} characters
+                    </span>
+                  </div>
+                )}
               </div>
 
               {/* Success Notification Pill */}
               {successMsg && (
                 <div style={{ background: 'var(--status-green-bg)', border: '1px solid rgba(62, 138, 94, 0.35)', color: 'var(--status-green)', borderRadius: '6px', padding: '8px 12px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <CheckCircle2 size={13} />
+                  <CheckCircle2 size={13} style={{ flexShrink: 0 }} />
                   <span>{successMsg}</span>
                 </div>
               )}
@@ -325,7 +544,7 @@ export function LoginGateway({ users = [], onLogin }) {
               {/* Error Message Pill */}
               {errorMsg && (
                 <div className="login-error-pill" id="login-error-pill">
-                  <AlertCircle size={14} />
+                  <AlertCircle size={14} style={{ flexShrink: 0 }} />
                   <span>{errorMsg}</span>
                 </div>
               )}
@@ -428,19 +647,46 @@ export function LoginGateway({ users = [], onLogin }) {
                     <Lock size={12} style={{ color: 'var(--accent)' }} />
                     <span>Security Password</span>
                   </span>
+                  <span className="mono" style={{ fontSize: '10px', color: 'var(--accent-strong)' }}>
+                    Min. 6 Characters
+                  </span>
                 </label>
-                <input
-                  type="password"
-                  id="reg-password-input"
-                  required
-                  className="dispatch-textarea"
-                  style={{ height: '42px', padding: '10px 14px', resize: 'none' }}
-                  placeholder="Create secure account password (min. 6 chars)..."
-                  value={regPassword}
-                  onChange={(e) => setRegPassword(e.target.value)}
-                  disabled={isLoading}
-                  autoComplete="new-password"
-                />
+
+                <div className="password-input-container">
+                  <input
+                    type={showRegPassword ? 'text' : 'password'}
+                    id="reg-password-input"
+                    required
+                    className="dispatch-textarea password-input-field"
+                    style={{ height: '42px', padding: '10px 14px', resize: 'none' }}
+                    placeholder="Create secure password (letters, digits, or combined)..."
+                    value={regPassword}
+                    onChange={(e) => setRegPassword(e.target.value)}
+                    disabled={isLoading}
+                    autoComplete="new-password"
+                  />
+                  <button
+                    type="button"
+                    className="password-toggle-btn"
+                    onClick={() => setShowRegPassword(!showRegPassword)}
+                    title={showRegPassword ? 'Hide password' : 'Show password'}
+                    aria-label={showRegPassword ? 'Hide password' : 'Show password'}
+                  >
+                    {showRegPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+                  </button>
+                </div>
+
+                {/* Registration Password Strength & Feedback */}
+                {regPassword.length > 0 && (
+                  <div className="password-live-feedback">
+                    <span style={{ color: 'var(--ink)' }}>
+                      Type: <strong>{regPasswordStats.label}</strong>
+                    </span>
+                    <span className="mono" style={{ color: regPassword.length >= 6 ? 'var(--status-green)' : 'var(--status-red)' }}>
+                      {regPassword.length >= 6 ? `✓ ${regPassword.length} chars (Valid)` : `⚠️ ${regPassword.length}/6 chars (Too short)`}
+                    </span>
+                  </div>
+                )}
               </div>
 
               {/* Founder Bootstrap Key Required Field */}
@@ -494,7 +740,7 @@ export function LoginGateway({ users = [], onLogin }) {
               {/* Error Message */}
               {errorMsg && (
                 <div className="login-error-pill" id="reg-error-pill">
-                  <AlertCircle size={14} />
+                  <AlertCircle size={14} style={{ flexShrink: 0 }} />
                   <span>{errorMsg}</span>
                 </div>
               )}
@@ -526,8 +772,13 @@ export function LoginGateway({ users = [], onLogin }) {
           {/* Quick Access Pre-Authorized Node Directory */}
           {users.length > 0 && authMode === 'signin' && (
             <div className="login-quick-section">
-              <div className="section-kicker" style={{ marginBottom: '10px', fontSize: '10px', padding: '3px 10px' }}>
-                Quick Node Directory ({selectedRole === 'founder' ? 'Founders' : 'Engineers'})
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+                <div className="section-kicker" style={{ fontSize: '10px', padding: '3px 10px', margin: 0 }}>
+                  Quick Node Directory ({selectedRole === 'founder' ? 'Founders' : 'Engineers'})
+                </div>
+                <span className="mono" style={{ fontSize: '10px', color: 'var(--muted)' }}>
+                  Click to pre-fill {selectedRole === 'founder' ? 'PIN 9901' : 'PIN 1042'}
+                </span>
               </div>
               
               {roleUsers.length === 0 ? (
@@ -536,30 +787,37 @@ export function LoginGateway({ users = [], onLogin }) {
                 </div>
               ) : (
                 <div className="quick-nodes-grid">
-                  {roleUsers.map(user => (
-                    <button
-                      key={user.id}
-                      type="button"
-                      className="quick-node-card"
-                      onClick={() => handleSelectQuickNode(user)}
-                      disabled={isLoading}
-                      title={`Select ${user.name} (${user.email})`}
-                      aria-label={`Select ${user.name}`}
-                    >
-                      <div className="quick-node-avatar">
-                        {user.name.split(' ').map(n => n[0]).join('')}
-                      </div>
-                      <div className="quick-node-info">
-                        <div className="quick-node-name">
-                          {user.name} {user.skill_set ? `(${user.skill_set})` : ''}
+                  {roleUsers.map(user => {
+                    const isFnd = user.role === 'founder';
+                    const pinHint = isFnd ? '9901' : '1042';
+                    return (
+                      <button
+                        key={user.id}
+                        type="button"
+                        className="quick-node-card"
+                        onClick={() => handleSelectQuickNode(user)}
+                        disabled={isLoading}
+                        title={`Select ${user.name} (PIN: ${pinHint})`}
+                        aria-label={`Select ${user.name}`}
+                      >
+                        <div className="quick-node-avatar">
+                          {user.name.split(' ').map(n => n[0]).join('')}
                         </div>
-                        <div className="quick-node-mac mono" style={{ fontSize: '10px', color: 'var(--accent-strong)' }}>
-                          {user.email}
+                        <div className="quick-node-info">
+                          <div className="quick-node-name" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            <span>{user.name}</span>
+                            <span style={{ fontSize: '9px', background: isFnd ? 'rgba(184, 134, 11, 0.12)' : 'var(--accent-tint-2)', color: isFnd ? '#996515' : 'var(--accent-strong)', padding: '1px 5px', borderRadius: '4px', fontWeight: 600 }}>
+                              PIN: {pinHint}
+                            </span>
+                          </div>
+                          <div className="quick-node-mac mono" style={{ fontSize: '10px', color: 'var(--accent-strong)' }}>
+                            {user.email}
+                          </div>
                         </div>
-                      </div>
-                      <ArrowRight size={14} className="quick-node-arr" style={{ color: 'var(--accent)' }} />
-                    </button>
-                  ))}
+                        <ArrowRight size={14} className="quick-node-arr" style={{ color: 'var(--accent)' }} />
+                      </button>
+                    );
+                  })}
                 </div>
               )}
             </div>

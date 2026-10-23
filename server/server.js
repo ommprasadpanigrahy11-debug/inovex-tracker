@@ -2175,9 +2175,9 @@ const maintenanceTimer = setInterval(() => {
 }, 3600000); // Once per hour
 if (maintenanceTimer.unref) maintenanceTimer.unref();
 
-// Start HTTP server unless running inside automated test harness
+// Start HTTP server unless running inside automated test harness or Vercel serverless
 let listener = null;
-if (process.env.NODE_ENV !== 'test') {
+if (process.env.NODE_ENV !== 'test' && !process.env.VERCEL) {
   listener = server.listen(port, '0.0.0.0', () => {
     console.log(`\n========================================================`);
     console.log(`[Lexven Inovex Web Platform] Online & Secure!`);

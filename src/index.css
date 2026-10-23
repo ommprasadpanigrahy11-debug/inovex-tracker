@@ -2358,30 +2358,6 @@ a {
   text-align: center;
 }
 
-/* Biometric Sensor Inline Button in forms */
-.btn-bio-trigger {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  width: 100%;
-  padding: 10px 16px;
-  background: var(--accent-tint-2);
-  border: 1px solid rgba(95, 115, 72, 0.3);
-  border-radius: 8px;
-  color: var(--accent-strong);
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.15s ease;
-  margin-top: 4px;
-}
-
-.btn-bio-trigger:hover {
-  background: var(--accent-tint);
-  border-color: var(--accent);
-  transform: translateY(-1px);
-}
 
 @keyframes popIn {
   0% { transform: scale(0.6); opacity: 0; }
@@ -3150,3 +3126,193 @@ a {
     width: 94vw;
   }
 }
+
+/* ==============================================================================
+   LOGIN GATEWAY ENHANCED LAYMAN GUIDANCE & PASSWORD STYLING
+   ============================================================================== */
+.login-guide-card {
+  background: var(--bg-warm);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 18px;
+  transition: all 0.2s ease;
+}
+
+.login-guide-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  user-select: none;
+}
+
+.login-guide-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.login-guide-toggle-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--accent);
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: 6px;
+  transition: background 0.15s ease;
+}
+
+.login-guide-toggle-btn:hover {
+  background: var(--accent-tint-2);
+}
+
+.login-guide-content {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  animation: fade-in 0.2s ease;
+}
+
+.login-guide-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.login-guide-item-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.login-guide-item-desc {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.login-guide-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.login-guide-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 5px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+.login-guide-badge.founder {
+  background: rgba(184, 134, 11, 0.12);
+  border: 1px solid rgba(184, 134, 11, 0.35);
+  color: #996515;
+}
+
+.login-guide-badge.employee {
+  background: var(--accent-tint-2);
+  border: 1px solid rgba(95, 115, 72, 0.35);
+  color: var(--accent-strong);
+}
+
+.login-guide-badge.rule {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  font-family: var(--font-sans);
+}
+
+.password-input-container {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.password-input-field {
+  width: 100%;
+  padding-right: 42px !important;
+}
+
+.password-toggle-btn {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--muted);
+  padding: 6px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+
+.password-toggle-btn:hover {
+  color: var(--ink);
+  background: var(--bg-warm);
+}
+
+.password-live-feedback {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  padding: 5px 8px;
+  background: var(--bg-warm);
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  margin-top: 4px;
+}
+
+.quick-pin-fill-container {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 4px;
+}
+
+.btn-quick-fill {
+  background: var(--accent-tint-2);
+  border: 1px solid rgba(95, 115, 72, 0.25);
+  color: var(--accent-strong);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: all 0.15s ease;
+}
+
+.btn-quick-fill:hover {
+  background: var(--accent-tint);
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+
