@@ -478,9 +478,9 @@ export function TelemetryGraphView({
           type="button"
           onClick={() => setSelectedNodeId('all')}
           style={{
-            background: selectedNodeId === 'all' ? 'var(--ink)' : 'var(--bg)',
+            background: selectedNodeId === 'all' ? 'var(--accent-strong)' : 'var(--card)',
             color: selectedNodeId === 'all' ? '#FFFFFF' : 'var(--muted)',
-            border: '1px solid ' + (selectedNodeId === 'all' ? 'var(--ink)' : 'var(--line)'),
+            border: '1px solid ' + (selectedNodeId === 'all' ? 'var(--accent-strong)' : 'var(--line)'),
             padding: '5px 12px',
             borderRadius: '999px',
             fontSize: '12px',
@@ -760,7 +760,7 @@ export function TelemetryGraphView({
             top: '16px',
             right: mousePos.x > width * 0.55 ? 'auto' : '16px',
             left: mousePos.x > width * 0.55 ? '16px' : 'auto',
-            background: 'rgba(250, 250, 248, 0.94)',
+            background: 'var(--card)',
             backdropFilter: 'blur(10px)',
             border: '1px solid var(--line)',
             borderRadius: '8px',

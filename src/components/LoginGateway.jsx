@@ -21,9 +21,12 @@ import {
   ChevronDown,
   ChevronUp,
   Hash,
-  Check
+  Check,
+  Sun,
+  Moon
 } from 'lucide-react';
 import { registerUser, bootstrapFounder, loginUser, setupUserPassword, generateMacAddress } from '../lib/dataService';
+import { applyTheme, getSavedTheme } from '../lib/theme';
 
 /**
  * Analyzes the entered password string to provide plain-language, real-time feedback
@@ -82,6 +85,21 @@ export function LoginGateway({ users = [], onLogin }) {
 
   // Guide accordion state
   const [guideExpanded, setGuideExpanded] = useState(true);
+
+  // Theme state
+  const [currentTheme, setCurrentTheme] = useState(() => {
+    if (typeof document !== 'undefined') {
+      return document.documentElement.getAttribute('data-theme') || getSavedTheme();
+    }
+    return getSavedTheme();
+  });
+
+  const handleToggleTheme = () => {
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    const next = isDark ? 'light' : 'dark';
+    applyTheme(next);
+    setCurrentTheme(next);
+  };
 
   // Register state
   const [regName, setRegName] = useState('');
@@ -272,6 +290,19 @@ export function LoginGateway({ users = [], onLogin }) {
     <div className="login-gateway-wrapper">
       <div className="login-gateway-container">
         
+        {/* Quick Theme Switcher Pill */}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', width: '100%', marginBottom: '14px' }}>
+          <button
+            type="button"
+            className="theme-toggle-pill"
+            onClick={handleToggleTheme}
+            title={`Switch to ${currentTheme === 'dark' ? 'Light' : 'Dark'} theme`}
+          >
+            {currentTheme === 'dark' ? <Sun size={13} style={{ color: 'var(--accent)' }} /> : <Moon size={13} style={{ color: 'var(--muted)' }} />}
+            <span>{currentTheme === 'dark' ? 'Light Theme' : 'Dark Theme'}</span>
+          </button>
+        </div>
+
         {/* Brand Header */}
         <div className="login-brand-header">
           <div className="inovex-wordmark" style={{ fontSize: '32px', justifyContent: 'center' }}>

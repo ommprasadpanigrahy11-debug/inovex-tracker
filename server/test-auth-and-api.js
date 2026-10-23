@@ -55,6 +55,13 @@ process.env.ALLOWED_ORIGIN = 'https://inovex-production-app.vercel.app';
 const TEST_BOOTSTRAP_SECRET = 'inovex_test_bootstrap_secret_high_entropy_2026';
 process.env.INITIAL_FOUNDER_KEY = TEST_BOOTSTRAP_SECRET;
 
+process.on('uncaughtException', (err) => {
+  console.error('*** UNCAUGHT EXCEPTION ***', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('*** UNHANDLED REJECTION ***', reason);
+});
+
 let passed = 0;
 let failed = 0;
 

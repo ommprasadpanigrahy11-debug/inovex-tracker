@@ -18,10 +18,13 @@ import {
   Database,
   LogOut,
   FileText,
-  User
+  User,
+  Sun,
+  Moon
 } from 'lucide-react';
 import { isSupabaseConfigured } from '../lib/supabase';
 import { ProfileMenu } from './ProfileMenu';
+import { applyTheme, getSavedTheme } from '../lib/theme';
 
 export function SidebarNav({ 
   currentUser, 
@@ -37,7 +40,20 @@ export function SidebarNav({
 }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [latencyMs, setLatencyMs] = useState(12);
+  const [currentTheme, setCurrentTheme] = useState(() => {
+    if (typeof document !== 'undefined') {
+      return document.documentElement.getAttribute('data-theme') || getSavedTheme();
+    }
+    return getSavedTheme();
+  });
   const isFounder = currentUser?.role === 'founder';
+
+  const handleToggleTheme = () => {
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    const next = isDark ? 'light' : 'dark';
+    applyTheme(next);
+    setCurrentTheme(next);
+  };
 
   // Live real-time sub-millisecond latency ticker
   useEffect(() => {
@@ -305,8 +321,27 @@ export function SidebarNav({
             )}
           </div>
 
-          {/* 6. CLOUD BACKEND STATUS FOOTER */}
+          {/* 6. CLOUD BACKEND STATUS FOOTER & THEME CONTROLLER */}
           <div className="sidebar-footer">
+            <button
+              type="button"
+              className="sidebar-theme-toggle-btn"
+              onClick={handleToggleTheme}
+              title={`Switch to ${currentTheme === 'dark' ? 'Light' : 'Dark'} theme`}
+            >
+              {currentTheme === 'dark' ? (
+                <Sun size={14} style={{ color: 'var(--accent)' }} />
+              ) : (
+                <Moon size={14} style={{ color: 'var(--muted)' }} />
+              )}
+              <span style={{ fontSize: '11px', flex: 1, textAlign: 'left', fontWeight: 500 }}>
+                {currentTheme === 'dark' ? 'Dark Theme' : 'Light Theme'}
+              </span>
+              <span className="mono" style={{ fontSize: '10px', color: 'var(--accent-strong)', background: 'var(--bg)', padding: '2px 6px', borderRadius: '4px', border: '1px solid var(--line)' }}>
+                Switch
+              </span>
+            </button>
+
             <div className="footer-status-pill">
               <Database size={13} style={{ color: isSupabaseConfigured ? 'var(--status-green)' : 'var(--muted)' }} />
               <span style={{ fontSize: '11px', color: 'var(--ink)' }}>

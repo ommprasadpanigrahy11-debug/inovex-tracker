@@ -1286,7 +1286,7 @@ export function EmployeeWorkspace({
                     </p>
 
                     {/* AI Agent Audit Summary Badge */}
-                    <div style={{ background: '#ffffff', border: '1px solid var(--line)', borderRadius: '8px', padding: '12px 16px', textAlign: 'left', marginTop: '10px' }}>
+                    <div style={{ background: 'var(--card)', border: '1px solid var(--line)', borderRadius: '8px', padding: '12px 16px', textAlign: 'left', marginTop: '10px' }}>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
                         <span className="specimen-label" style={{ margin: 0 }}>AI Agent 90-Min Video Audit</span>
                         <span className="badge active">Submitted to Founder</span>
