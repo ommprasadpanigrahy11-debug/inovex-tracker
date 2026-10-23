@@ -120,6 +120,26 @@ app.use(cors({
 
 app.use(express.json({ limit: '6mb' }));
 
+// URL Normalizer for Serverless/Vercel environments (ensures stripped /api prefixes match Express routes)
+app.use((req, res, next) => {
+  if (!req.url.startsWith('/api') && !req.url.startsWith('/recordings')) {
+    if (
+      req.url.startsWith('/auth') || 
+      req.url.startsWith('/users') || 
+      req.url.startsWith('/tasks') || 
+      req.url.startsWith('/workspace') || 
+      req.url.startsWith('/admin') || 
+      req.url.startsWith('/telemetry') || 
+      req.url.startsWith('/system') || 
+      req.url.startsWith('/avatars') ||
+      req.url === '/health'
+    ) {
+      req.url = '/api' + req.url;
+    }
+  }
+  next();
+});
+
 // Universal Path Traversal Sentinel (Blocks directory traversal attacks across all endpoints)
 app.use((req, res, next) => {
   let decodedUrl = req.url;

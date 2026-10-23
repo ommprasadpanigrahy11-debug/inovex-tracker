@@ -247,7 +247,7 @@ export function LoginGateway({ users = [], onLogin }) {
             email: cleanEmail,
             password: pass,
             role: 'employee',
-            skill_set: cleanSkillSet,
+            skill_set: skillSet,
             device_mac_address: mac
           });
 
