@@ -239,11 +239,40 @@ a {
   display: flex;
   align-items: center;
   gap: 6px;
+  transition: color 0.2s ease;
 }
 
 .lexven-wordmark span.leaf,
 .inovex-wordmark span.leaf {
   color: var(--accent);
+  transition: text-shadow 0.25s ease, color 0.25s ease;
+}
+
+/* Dark Mode Wordmark & Glowing Accent */
+[data-theme="dark"] .lexven-wordmark,
+[data-theme="dark"] .inovex-wordmark {
+  color: #F8FAFC;
+  font-weight: 800;
+  letter-spacing: -0.035em;
+  text-shadow: 0 0 20px rgba(255, 255, 255, 0.08);
+}
+
+[data-theme="dark"] .lexven-wordmark span.leaf,
+[data-theme="dark"] .inovex-wordmark span.leaf {
+  color: #88A968;
+  text-shadow: 0 0 12px rgba(136, 169, 104, 0.8), 0 0 24px rgba(136, 169, 104, 0.4);
+  font-weight: 900;
+  display: inline-block;
+  animation: leaf-glow 3s infinite ease-in-out alternate;
+}
+
+@keyframes leaf-glow {
+  0% {
+    text-shadow: 0 0 10px rgba(136, 169, 104, 0.6), 0 0 20px rgba(136, 169, 104, 0.3);
+  }
+  100% {
+    text-shadow: 0 0 16px rgba(136, 169, 104, 0.9), 0 0 32px rgba(136, 169, 104, 0.5);
+  }
 }
 
 .lexven-badge-tag,
@@ -258,6 +287,14 @@ a {
   letter-spacing: 0.03em;
 }
 
+[data-theme="dark"] .lexven-badge-tag,
+[data-theme="dark"] .inovex-badge-tag {
+  background: rgba(255, 255, 255, 0.05);
+  color: #94A3B8;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+}
+
 .inovex-version-tag {
   font-family: var(--font-mono);
   font-size: 10px;
@@ -269,6 +306,25 @@ a {
   border-radius: 999px;
   letter-spacing: 0.05em;
   text-transform: uppercase;
+  transition: all 0.2s ease;
+}
+
+[data-theme="dark"] .inovex-version-tag {
+  background: rgba(136, 169, 104, 0.16);
+  color: #BBE3A0;
+  border: 1px solid rgba(136, 169, 104, 0.4);
+  box-shadow: 0 0 12px rgba(136, 169, 104, 0.2);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+/* Lexven Sticky Header Dark Mode */
+[data-theme="dark"] .lexven-header {
+  background: rgba(12, 13, 16, 0.92);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 4px 24px -2px rgba(0, 0, 0, 0.55);
 }
 
 /* Header Live Indicator */
@@ -287,6 +343,12 @@ a {
   letter-spacing: 0.02em;
 }
 
+[data-theme="dark"] .live-pill {
+  background: rgba(136, 169, 104, 0.14);
+  border: 1px solid rgba(136, 169, 104, 0.32);
+  color: #A9D18E;
+}
+
 .live-pill .dot {
   width: 6px;
   height: 6px;
@@ -294,6 +356,10 @@ a {
   background: var(--status-green);
   box-shadow: 0 0 0 3px rgba(62, 138, 94, 0.25);
   animation: pulse-dot 2s infinite ease-in-out;
+}
+
+[data-theme="dark"] .live-pill .dot {
+  box-shadow: 0 0 0 3px rgba(136, 169, 104, 0.3), 0 0 10px rgba(136, 169, 104, 0.6);
 }
 
 @keyframes pulse-dot {
@@ -1744,6 +1810,15 @@ a {
     align-items: center;
     justify-content: space-between;
     box-sizing: border-box;
+    transition: background 0.2s ease, border-color 0.2s ease;
+  }
+
+  [data-theme="dark"] .mobile-topbar {
+    background: rgba(12, 13, 16, 0.92);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 4px 24px -2px rgba(0, 0, 0, 0.6);
   }
 
   .mobile-brand {
@@ -1767,6 +1842,21 @@ a {
     cursor: pointer;
     position: relative;
     touch-action: manipulation;
+    transition: all 0.2s ease;
+  }
+
+  [data-theme="dark"] .mobile-install-btn {
+    background: rgba(136, 169, 104, 0.14);
+    border: 1px solid rgba(136, 169, 104, 0.38);
+    color: #BBE3A0;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  }
+
+  [data-theme="dark"] .mobile-install-btn:hover {
+    background: rgba(136, 169, 104, 0.24);
+    border-color: rgba(136, 169, 104, 0.6);
+    color: #DCFCE7;
+    box-shadow: 0 4px 16px rgba(136, 169, 104, 0.25);
   }
 
   .mobile-dot {
@@ -1788,6 +1878,20 @@ a {
     color: var(--ink);
     cursor: pointer;
     touch-action: manipulation;
+    transition: all 0.2s ease;
+  }
+
+  [data-theme="dark"] .mobile-menu-toggle {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    color: #F8FAFC;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  }
+
+  [data-theme="dark"] .mobile-menu-toggle:hover {
+    background: rgba(255, 255, 255, 0.12);
+    border-color: rgba(255, 255, 255, 0.28);
+    color: #FFFFFF;
   }
 
   /* Slide-Out Off-Canvas Drawer */

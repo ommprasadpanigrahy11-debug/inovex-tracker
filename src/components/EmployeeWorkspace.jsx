@@ -135,9 +135,10 @@ export function EmployeeWorkspace({
 
   // Fetch initial workspace state (from Supabase Cloud or local API)
   const fetchWorkspace = async () => {
-    if (!currentUser?.id) return;
+    const lookupId = currentUser?.id || currentUser?.email;
+    if (!lookupId) return;
     try {
-      const data = await fetchWorkspaceData(currentUser.id);
+      const data = await fetchWorkspaceData(lookupId);
       if (data) {
         setWorkspaceData(data);
         const task = data.task;
@@ -174,28 +175,49 @@ export function EmployeeWorkspace({
 
   useEffect(() => {
     fetchWorkspace();
-  }, [currentUser]);
+  }, [currentUser?.id, currentUser?.email]);
 
   // WebSocket event listeners
   useEffect(() => {
     if (!lastWsEvent) return;
 
-    if (lastWsEvent.type === 'AI_AGENT_WARNING' && lastWsEvent.data?.userId === currentUser.id) {
+    const myId = currentUser?.id;
+    const myEmail = currentUser?.email?.toLowerCase();
+
+    const isMatch = (targetId) => {
+      if (!targetId) return false;
+      const str = String(targetId).toLowerCase();
+      return (myId && str === String(myId).toLowerCase()) || (myEmail && str === myEmail);
+    };
+
+    if (lastWsEvent.type === 'AI_AGENT_WARNING' && isMatch(lastWsEvent.data?.userId)) {
       setWarningCount(lastWsEvent.data.warningNumber);
       setWarningMessage(lastWsEvent.data.message);
     }
 
-    if (lastWsEvent.type === 'SESSION_TERMINATED' && lastWsEvent.data?.userId === currentUser.id) {
+    if (lastWsEvent.type === 'SESSION_TERMINATED' && isMatch(lastWsEvent.data?.userId)) {
       setIsTerminated(true);
       setIsTimerRunning(false);
       setIsScreenTracking(false);
       setTerminationReason(lastWsEvent.data.reason || 'Session terminated by AI Agent.');
     }
 
-    if (lastWsEvent.type === 'TASK_DISPATCHED' && lastWsEvent.data?.assignedEmployee?.id === currentUser.id) {
-      fetchWorkspace();
+    if (
+      lastWsEvent.type === 'TASK_DISPATCHED' || 
+      lastWsEvent.type === 'TASK_ASSIGNED' || 
+      lastWsEvent.type === 'TASK_STATUS_UPDATED'
+    ) {
+      const data = lastWsEvent.data;
+      if (
+        isMatch(data?.assignedEmployee?.id) || 
+        isMatch(data?.assignedEmployee?.email) || 
+        isMatch(data?.task?.assigned_to) || 
+        isMatch(data?.assignedTo)
+      ) {
+        fetchWorkspace();
+      }
     }
-  }, [lastWsEvent, currentUser.id]);
+  }, [lastWsEvent, currentUser?.id, currentUser?.email]);
 
   // Timestamp-based 90-Minute Countdown (Immune to browser background throttle and drift)
   useEffect(() => {
@@ -609,9 +631,13 @@ export function EmployeeWorkspace({
     }
   };
 
-  const allTasks = (workspaceData?.tasks && workspaceData.tasks.length > 0)
-    ? workspaceData.tasks 
-    : (workspaceData?.task ? [workspaceData.task] : []);
+  const allTasks = React.useMemo(() => {
+    const list = Array.isArray(workspaceData?.tasks) ? [...workspaceData.tasks] : [];
+    if (workspaceData?.task && !list.some(t => t.id === workspaceData.task.id)) {
+      list.unshift(workspaceData.task);
+    }
+    return list;
+  }, [workspaceData]);
 
   const currentTask = (selectedTaskId ? allTasks.find(t => t.id === selectedTaskId) : null)
     || workspaceData?.task 

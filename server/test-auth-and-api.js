@@ -736,6 +736,62 @@ async function runAllTests() {
     });
     assert(empVerifyTask.status === 403, 'Employee cannot verify/approve task deliverables (HTTP 403)');
 
+    // 4.3b Verified Task Assignment and Employee Workspace Listing Down
+    const founderAssignRes = await fetch(`${baseUrl}/api/tasks/assign`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${founderToken}` },
+      body: JSON.stringify({
+        title: 'Manual Directive For Employee B',
+        description: 'Implement distributed ingestion pipeline',
+        deadline: '2026-10-25T18:00:00Z',
+        assignedUserId: 'usr_emp_02'
+      })
+    });
+    assert(founderAssignRes.status === 200, 'Founder successfully assigns task to Employee B via /api/tasks/assign');
+    const founderAssignData = await founderAssignRes.json();
+    assert(founderAssignData.success && founderAssignData.task, 'Task assign response contains created task');
+    const manualAssignedTaskId = founderAssignData.task.id;
+
+    // Verify employee B workspace lists down the manually assigned task
+    const empBWorkspaceRes = await fetch(`${baseUrl}/api/workspace/usr_emp_02`, {
+      headers: { 'Authorization': `Bearer ${empBToken}` }
+    });
+    assert(empBWorkspaceRes.status === 200, 'Employee B can retrieve workspace');
+    const empBWorkspaceData = await empBWorkspaceRes.json();
+    assert(Array.isArray(empBWorkspaceData.tasks), 'Workspace returns tasks array');
+    const hasManualTask = empBWorkspaceData.tasks.some(t => t.id === manualAssignedTaskId);
+    assert(hasManualTask, 'RULE VERIFIED: Manually assigned task lists down in employee dashboard');
+
+    // Verify employee B can retrieve workspace by email
+    const empBWorkspaceByEmail = await fetch(`${baseUrl}/api/workspace/elena.rostova@lexven.com`, {
+      headers: { 'Authorization': `Bearer ${empBToken}` }
+    });
+    assert(empBWorkspaceByEmail.status === 200, 'Employee B can retrieve workspace using email identifier');
+    const empBEmailData = await empBWorkspaceByEmail.json();
+    assert(empBEmailData.tasks.some(t => t.id === manualAssignedTaskId), 'Tasks list down when workspace queried by email');
+
+    // Founder dispatches sprint task via AI Dispatch targeted to Employee B
+    const founderAiDispatchRes = await fetch(`${baseUrl}/api/tasks/ai-dispatch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${founderToken}` },
+      body: JSON.stringify({
+        prompt: 'AI Micro-Sprint: Sub-second Telemetry Streaming\nOptimize WebSocket buffer queue to prevent backpressure drops',
+        assignedUserId: 'usr_emp_02'
+      })
+    });
+    assert(founderAiDispatchRes.status === 200, 'Founder successfully dispatches sprint via /api/tasks/ai-dispatch');
+    const aiDispatchData = await founderAiDispatchRes.json();
+    assert(aiDispatchData.success && aiDispatchData.task, 'AI dispatch returns created task');
+    assert(aiDispatchData.task.assigned_to === 'usr_emp_02', 'AI dispatch assigned task specifically to requested employee node');
+
+    // Verify employee B workspace lists down the AI dispatched task
+    const empBWorkspaceAfterAi = await fetch(`${baseUrl}/api/workspace/usr_emp_02`, {
+      headers: { 'Authorization': `Bearer ${empBToken}` }
+    });
+    const empBAfterAiData = await empBWorkspaceAfterAi.json();
+    const hasAiTask = empBAfterAiData.tasks.some(t => t.id === aiDispatchData.task.id);
+    assert(hasAiTask, 'RULE VERIFIED: AI dispatched task lists down in employee dashboard even across refreshes');
+
     // 4.4 Data Minimization & Sensitive Field Omission in /api/users
     console.log('\n  [4.4] Employee Directory Data Minimization...');
     const empUsersRes = await fetch(`${baseUrl}/api/users`, {

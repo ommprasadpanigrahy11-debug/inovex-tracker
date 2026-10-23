@@ -55,6 +55,7 @@ export function AdminDashboard({ currentUser, lastWsEvent, activeTab, onInspectE
 
   // Dispatch Terminal state
   const [dispatchPrompt, setDispatchPrompt] = useState('');
+  const [selectedDispatchNode, setSelectedDispatchNode] = useState('');
   const [dispatchLogs, setDispatchLogs] = useState([]);
   const [isDispatching, setIsDispatching] = useState(false);
   const [pipelineStep, setPipelineStep] = useState(0);
@@ -201,14 +202,16 @@ export function AdminDashboard({ currentUser, lastWsEvent, activeTab, onInspectE
       setTimeout(() => setPipelineStep(2), 250);
       setTimeout(() => setPipelineStep(3), 500);
 
-      // Select target employee node (or first available registered node)
+      // Select target employee node (selected, or first available registered node, or auto-match)
       const employeeNodes = gridUsers.filter(u => u.role === 'employee');
-      const targetNode = employeeNodes.length > 0 ? employeeNodes[0] : (gridUsers[0] || null);
+      const targetNode = selectedDispatchNode 
+        ? employeeNodes.find(u => u.id === selectedDispatchNode || u.email === selectedDispatchNode)
+        : (employeeNodes[0] || gridUsers[0] || null);
 
-      if (!targetNode) {
+      if (!targetNode && !selectedDispatchNode && employeeNodes.length === 0) {
         setDispatchLogs(prev => [
           ...prev,
-          `[Notice] No active nodes connected. Please register an engineering node first.`
+          `[Notice] No active employee nodes connected. Please register an engineering node first.`
         ]);
         setIsDispatching(false);
         return;
@@ -218,14 +221,16 @@ export function AdminDashboard({ currentUser, lastWsEvent, activeTab, onInspectE
         ? dispatchPrompt.slice(0, 55) + '...'
         : dispatchPrompt;
 
-      const res = await dispatchSprintTask(sprintTitle, dispatchPrompt, targetNode.id);
+      const targetIdToPass = selectedDispatchNode || (targetNode ? targetNode.id : null);
+      const res = await dispatchSprintTask(sprintTitle, dispatchPrompt, targetIdToPass);
 
       if (res && res.success) {
         setTimeout(() => {
           setPipelineStep(4);
+          const assignedUserObj = res.assignedTo || targetNode;
           setDispatchLogs(prev => [
             ...prev,
-            `CapacityMatcher matched directive to node: ${targetNode.name} (${targetNode.device_mac_address})`,
+            `CapacityMatcher matched directive to node: ${assignedUserObj?.name || 'Assigned Engineering Node'} (${assignedUserObj?.email || assignedUserObj?.device_mac_address || 'Enclave Node'})`,
             `90-minute burst sprint checkpoint initialized.`,
             `Sprint dispatched successfully to engineering node.`
           ]);
@@ -481,6 +486,26 @@ export function AdminDashboard({ currentUser, lastWsEvent, activeTab, onInspectE
               </div>
             </div>
 
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px', flexWrap: 'wrap', gap: '8px' }}>
+              <label style={{ fontSize: '12px', fontWeight: '600', color: 'var(--ink)' }}>
+                Target Engineering Node:
+              </label>
+              <select 
+                className="switcher-select"
+                style={{ padding: '6px 12px', fontSize: '12px', minWidth: '220px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--card)', color: 'var(--ink)' }}
+                value={selectedDispatchNode}
+                onChange={(e) => setSelectedDispatchNode(e.target.value)}
+                aria-label="Select Target Node for AI Dispatch"
+              >
+                <option value="">Auto-Match (Optimal least-loaded node)</option>
+                {gridUsers.filter(u => u.role === 'employee').map(u => (
+                  <option key={u.id} value={u.id}>
+                    {u.name} ({u.email || u.device_mac_address})
+                  </option>
+                ))}
+              </select>
+            </div>
+
             <textarea 
               className="dispatch-textarea"
               rows={3}
@@ -503,7 +528,7 @@ export function AdminDashboard({ currentUser, lastWsEvent, activeTab, onInspectE
                 </span>
               </button>
               <span className="mono" style={{ fontSize: '11px', color: 'var(--muted)' }}>
-                Target: Automatic least-loaded node
+                Target: {selectedDispatchNode ? (gridUsers.find(u => u.id === selectedDispatchNode)?.name || 'Direct Node') : 'Automatic least-loaded node'}
               </span>
             </div>
 

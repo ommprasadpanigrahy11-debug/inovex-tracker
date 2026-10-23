@@ -1304,36 +1304,50 @@ app.get('/api/admin/health-matrix', requireAuth, requireFounder, (req, res) => {
 // 4. FOUNDER TASK DISPATCH & ASSIGNMENT
 // -------------------------------------------------------------
 app.post('/api/tasks/ai-dispatch', requireAuth, requireFounder, (req, res) => {
-  const { prompt } = req.body;
+  const { prompt, assignedUserId, assignedTo, title, description } = req.body;
   if (!prompt || !prompt.trim()) {
     return res.status(400).json({ error: 'Raw project specification required.' });
   }
 
   try {
-    // 1. Find optimal employee with lowest active task burden
-    const employeeWorkloads = db.prepare(`
-      SELECT u.id, u.name, 
-        COUNT(CASE WHEN t.status IN ('pending', 'active') THEN 1 END) as active_count,
-        COALESCE(AVG(t.ai_health_score), 90) as avg_health
-      FROM users u
-      LEFT JOIN tasks t ON u.id = t.assigned_to
-      WHERE u.role = 'employee' AND u.is_active = 1
-      GROUP BY u.id
-      ORDER BY active_count ASC, avg_health DESC
-    `).all();
-
-    if (employeeWorkloads.length === 0) {
-      return res.status(400).json({ error: 'No active employee nodes registered. Please register an employee node first.' });
+    let targetEmployee = null;
+    const requestedTargetId = assignedUserId || assignedTo;
+    if (requestedTargetId && String(requestedTargetId).trim()) {
+      const cleanTargetId = String(requestedTargetId).trim();
+      targetEmployee = db.prepare(`
+        SELECT id, name, role, email, device_mac_address 
+        FROM users 
+        WHERE (id = ? OR LOWER(email) = LOWER(?)) AND role = 'employee' AND is_active = 1
+      `).get(cleanTargetId, cleanTargetId);
     }
 
-    const targetEmployee = employeeWorkloads[0];
+    // If no specific target requested or target not found, find optimal employee with lowest active task burden
+    if (!targetEmployee) {
+      const employeeWorkloads = db.prepare(`
+        SELECT u.id, u.name, u.email, u.device_mac_address,
+          COUNT(CASE WHEN t.status IN ('pending', 'active') THEN 1 END) as active_count,
+          COALESCE(AVG(t.ai_health_score), 90) as avg_health
+        FROM users u
+        LEFT JOIN tasks t ON u.id = t.assigned_to
+        WHERE u.role = 'employee' AND u.is_active = 1
+        GROUP BY u.id
+        ORDER BY active_count ASC, avg_health DESC
+      `).all();
+
+      if (employeeWorkloads.length === 0) {
+        return res.status(400).json({ error: 'No active employee nodes registered. Please register an employee node first.' });
+      }
+
+      targetEmployee = employeeWorkloads[0];
+    }
 
     // 2. Synthesize AI micro-sprint brief from prompt
     const taskId = 'tsk_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 6);
-    const titleSnippet = prompt.split('\n')[0].substring(0, 55).trim() || 'Autonomous Workflow Micro-Sprint';
+    const titleSnippet = (title && String(title).trim()) || prompt.split('\n')[0].substring(0, 55).trim() || 'Autonomous Workflow Micro-Sprint';
+    const cleanDesc = (description && String(description).trim()) || prompt;
     const computedHealth = 95;
 
-    const briefContent = `[AUTONOMOUS DISPATCH DIRECTIVE]\nTarget: ${titleSnippet}\n\nSPECIFICATION:\n${prompt}\n\nEXECUTION CONSTRAINTS:\n- 90-minute strict checkpoint burst.\n- Real-time telemetry monitoring enabled.\n- Proof submission required before checkpoint expiry.`;
+    const briefContent = `[AUTONOMOUS DISPATCH DIRECTIVE]\nTarget: ${titleSnippet}\n\nSPECIFICATION:\n${cleanDesc}\n\nEXECUTION CONSTRAINTS:\n- 90-minute strict checkpoint burst.\n- Real-time telemetry monitoring enabled.\n- Proof submission required before checkpoint expiry.`;
     const webhookUrl = `https://api.lexven.internal/v1/pow-hook/${taskId}`;
 
     db.prepare(`
@@ -1342,7 +1356,7 @@ app.post('/api/tasks/ai-dispatch', requireAuth, requireFounder, (req, res) => {
         ai_health_score, proof_of_work_webhook, checkpoint_timer, 
         sprint_started_at, is_acknowledged, created_at
       ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, 5400, NULL, 0, ?)
-    `).run(taskId, targetEmployee.id, titleSnippet, prompt, briefContent, computedHealth, webhookUrl, Date.now());
+    `).run(taskId, targetEmployee.id, titleSnippet, cleanDesc, briefContent, computedHealth, webhookUrl, Date.now());
 
     const createdTask = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
 
@@ -1376,7 +1390,7 @@ app.post('/api/tasks/assign', requireAuth, requireFounder, (req, res) => {
   }
 
   try {
-    const employee = db.prepare('SELECT id, name, role, device_mac_address FROM users WHERE id = ?').get(assignedUserId);
+    const employee = db.prepare('SELECT id, name, role, email, device_mac_address FROM users WHERE id = ? OR LOWER(email) = LOWER(?)').get(assignedUserId, assignedUserId);
     if (!employee || employee.role !== 'employee') {
       return res.status(400).json({ error: 'Assigned user must be an active employee node.' });
     }
@@ -1396,7 +1410,7 @@ app.post('/api/tasks/assign', requireAuth, requireFounder, (req, res) => {
       ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, 5400, NULL, 0, ?, ?)
     `).run(
       taskId, 
-      assignedUserId, 
+      employee.id, 
       cleanTitle, 
       cleanDesc, 
       cleanDesc || cleanTitle, 
@@ -1412,7 +1426,7 @@ app.post('/api/tasks/assign', requireAuth, requireFounder, (req, res) => {
       task: createdTask,
       assignedEmployee: employee,
       message: `Founder assigned new task: "${cleanTitle}" to ${employee.name}. Time limit deadline: ${deadline || 'Flexible'}`
-    }, { recipientUserId: assignedUserId });
+    }, { recipientUserId: employee.id });
 
     res.json({ success: true, task: createdTask });
   } catch (err) {
@@ -1490,41 +1504,41 @@ function handleWorkspaceRequest(req, res, targetUserId) {
   try {
     autoCheckDeadlines();
 
-    // Authorization check: Employees can only view their own workspace; Founders can view any
-    if (req.user.role !== 'founder' && req.user.id !== targetUserId) {
-      return res.status(403).json({ error: 'Access restricted: You cannot access other employee workspaces.' });
-    }
-
-    const user = db.prepare('SELECT id, name, role, email, skill_set, device_mac_address, is_active, last_seen_at FROM users WHERE id = ?').get(targetUserId);
+    const user = db.prepare('SELECT id, name, role, email, skill_set, device_mac_address, is_active, last_seen_at FROM users WHERE id = ? OR LOWER(email) = LOWER(?)').get(targetUserId, targetUserId);
     if (!user || user.role !== 'employee') {
       return res.status(404).json({ error: 'Authorized Employee node not found.' });
     }
 
-    // Update last seen
-    db.prepare('UPDATE users SET last_seen_at = ? WHERE id = ?').run(Date.now(), targetUserId);
+    // Authorization check: Employees can only view their own workspace; Founders can view any
+    if (req.user.role !== 'founder' && req.user.id !== user.id && req.user.email?.toLowerCase() !== user.email?.toLowerCase()) {
+      return res.status(403).json({ error: 'Access restricted: You cannot access other employee workspaces.' });
+    }
 
-    // Get active or latest assigned task
+    // Update last seen
+    db.prepare('UPDATE users SET last_seen_at = ? WHERE id = ?').run(Date.now(), user.id);
+
+    // Get active or latest assigned task matching employee id or email
     const task = db.prepare(`
       SELECT * FROM tasks 
-      WHERE assigned_to = ? 
+      WHERE assigned_to = ? OR LOWER(assigned_to) = LOWER(?) OR assigned_to = ?
       ORDER BY CASE 
         WHEN status = 'active' THEN 1 
         WHEN status = 'pending' THEN 2 
         WHEN status = 'review' THEN 3 
         ELSE 4 END, 
       created_at DESC LIMIT 1
-    `).get(targetUserId);
+    `).get(user.id, user.email || '', targetUserId);
 
-    // Get all assigned tasks for employee table
+    // Get all assigned tasks for employee table matching employee id or email
     const tasks = db.prepare(`
       SELECT * FROM tasks 
-      WHERE assigned_to = ? 
+      WHERE assigned_to = ? OR LOWER(assigned_to) = LOWER(?) OR assigned_to = ?
       ORDER BY created_at DESC
-    `).all(targetUserId);
+    `).all(user.id, user.email || '', targetUserId);
 
     const latestLog = db.prepare(`
       SELECT * FROM telemetry_logs WHERE user_id = ? ORDER BY timestamp DESC LIMIT 1
-    `).get(targetUserId);
+    `).get(user.id);
 
     res.json({
       user,
