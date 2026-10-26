@@ -44,6 +44,8 @@ import { FounderEmployeeView } from './FounderEmployeeView';
 
 // Screen recordings must fit the server's 100MB upload cap for a full 90-minute sprint:
 // 120 kbps * 5400 s ≈ 81MB. Screen content compresses well at a low frame rate.
+const SPRINT_TOTAL_SECONDS = 5400; // 90-minute sprint
+const MIN_REPORT_SECONDS = 600;    // generate an audit only if >= 10 minutes elapsed
 const RECORDING_BITRATE = 120000;
 // Must fit the server's 100MB upload cap for a full 90-min sprint:
 // 130 kbps * 5400 s / 8 ≈ 88MB. At maxDimension 1280 / 10 fps this is adequate
@@ -123,7 +125,9 @@ export function EmployeeWorkspace({
   const timerIntervalRef = useRef(null);
   const beatIntervalRef = useRef(null);
   const [screenStream, setScreenStream] = useState(null);
-  const [activeWindow, setActiveWindow] = useState('VS Code — inovex-workflow.ts');
+  // A browser / WebView cannot read the OS foreground window, so we only report
+  // what we can truthfully observe: whether the Inovex app itself is in focus.
+  const [activeWindow, setActiveWindow] = useState('Not tracking');
   const [keystrokes, setKeystrokes] = useState(46);
   const keystrokesRef = useRef(46);
   const videoRef = useRef(null);
@@ -372,10 +376,22 @@ export function EmployeeWorkspace({
     }
   };
 
-  // Upload a finalized sprint video blob to the backend for the AI anomaly audit
+  // Upload a finalized sprint video blob to the backend for the AI anomaly audit.
+  // A report is only generated once at least MIN_REPORT_SECONDS have elapsed; a
+  // full 90-minute sprint always qualifies, and an early stop qualifies after 10
+  // minutes. Shorter sessions are discarded (no report, recording dropped).
   const uploadSprintVideo = async (videoBlob, { native = false } = {}) => {
     if (!videoBlob || videoBlob.size === 0) {
       console.warn('Sprint finished with no recorded video; skipping empty upload.');
+      return;
+    }
+
+    const elapsedSeconds = SPRINT_TOTAL_SECONDS - secondsRemaining;
+    if (elapsedSeconds < MIN_REPORT_SECONDS) {
+      const mins = Math.floor(elapsedSeconds / 60);
+      setScreenCaptureError(
+        `Sprint ran ${mins} min — under the ${MIN_REPORT_SECONDS / 60}-minute minimum, so no audit report was generated and the recording was discarded.`
+      );
       return;
     }
 
@@ -387,7 +403,7 @@ export function EmployeeWorkspace({
         employeeName: currentUser.name,
         taskId: workspaceData?.task?.id || '',
         deviceType: isMobile ? 'android' : 'desktop',
-        durationSeconds: Math.max(30, 5400 - secondsRemaining),
+        durationSeconds: Math.max(MIN_REPORT_SECONDS, elapsedSeconds),
         warningCount: warningCount,
         isDemoSimulation: isDemoSimulationRef.current
       });
@@ -514,7 +530,6 @@ export function EmployeeWorkspace({
           setIsNativeRecording(true);
           isScreenTrackingRef.current = true;
           setIsScreenTracking(true);
-          setActiveWindow('Android screen (recording)');
           return null;
         } catch (err) {
           console.warn('Native screen recording declined/failed:', err);
@@ -531,7 +546,6 @@ export function EmployeeWorkspace({
         setIsActivityMode(true);
         isScreenTrackingRef.current = true;
         setIsScreenTracking(true);
-        setActiveWindow(document.visibilityState === 'hidden' ? 'App in background' : 'Inovex app (foreground)');
         return null;
       }
 
@@ -685,19 +699,29 @@ export function EmployeeWorkspace({
       screenStream.getTracks().forEach(track => track.stop());
       setScreenStream(null);
     }
-    if (!isScreenTracking) setIsActivityMode(false);
+    if (!isScreenTracking) {
+      setIsActivityMode(false);
+      setActiveWindow('Not tracking');
+    }
   }, [isScreenTracking]);
 
-  // Activity mode (phones): report when the employee leaves / returns to the app.
-  // The hidden beat is sent immediately because mobile browsers suspend timers in background.
+  // Truthful focus reporting for every tracking mode (native recording, desktop
+  // screen share, or activity-only). We can't name the foreground app, but the
+  // Page Visibility API tells us whether the employee is in the Inovex app or has
+  // switched away to another app/window. On a sprint this is the signal that matters.
   useEffect(() => {
-    if (!isActivityMode || !isScreenTracking || isTerminated) return;
+    if (!isScreenTracking || isTerminated) return;
 
-    const onVisibilityChange = () => {
+    const labelFor = (hidden) => hidden
+      ? 'Switched to another app/window'
+      : 'Inovex app in focus';
+
+    const report = (immediateBeat) => {
       const hidden = document.visibilityState === 'hidden';
-      const windowLabel = hidden ? 'App in background' : 'Inovex app (foreground)';
+      const windowLabel = labelFor(hidden);
       setActiveWindow(windowLabel);
-      if (hidden) {
+      // Beat immediately when leaving the app: mobile throttles background timers
+      if (immediateBeat && hidden) {
         sendTelemetryBeat(
           currentUser.id,
           workspaceData?.task?.id || null,
@@ -708,9 +732,11 @@ export function EmployeeWorkspace({
       }
     };
 
+    report(false); // set the initial truthful label when tracking starts
+    const onVisibilityChange = () => report(true);
     document.addEventListener('visibilitychange', onVisibilityChange);
     return () => document.removeEventListener('visibilitychange', onVisibilityChange);
-  }, [isActivityMode, isScreenTracking, isTerminated, workspaceData?.task?.id, currentUser?.id]);
+  }, [isScreenTracking, isTerminated, workspaceData?.task?.id, currentUser?.id]);
 
   // AI Agent Activity Check / Unusual Activity Trigger (Demo Action)
   const handleTriggerUnusualActivity = async () => {
@@ -935,7 +961,7 @@ export function EmployeeWorkspace({
             style={{ fontSize: '11px', padding: '5px 12px', flexShrink: 0 }}
             onClick={() => {
               setWarningMessage(null);
-              setActiveWindow('VS Code — inovex-workflow.ts');
+              setActiveWindow('Inovex app in focus');
             }}
           >
             I Corrected My Focus

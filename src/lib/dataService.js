@@ -365,6 +365,46 @@ export async function logoutUser() {
 /**
  * Update user personal profile
  */
+// Updates public.users, surviving a Supabase schema that is missing optional
+// profile columns. PostgREST rejects the whole update if any column is unknown
+// ("Could not find the 'X' column of 'users' in the schema cache"), so we strip
+// the offending column and retry, reporting which columns were dropped.
+async function updateUsersResilient(targetId, fullPayload) {
+  const payload = { ...fullPayload };
+  const droppedColumns = [];
+  const missingColumnRe = /Could not find the '(.+?)' column/i;
+
+  // At most one retry per column in the payload, plus a safety margin.
+  for (let attempt = 0; attempt <= Object.keys(fullPayload).length + 1; attempt++) {
+    const { data, error } = await supabase
+      .from('users')
+      .update(payload)
+      .eq('id', targetId)
+      .select();
+
+    if (!error) {
+      return { data, error: null, droppedColumns };
+    }
+
+    const match = (error.message || '').match(missingColumnRe);
+    const col = match && match[1];
+    if (col && col in payload) {
+      delete payload[col];
+      droppedColumns.push(col);
+      if (Object.keys(payload).length === 0) {
+        // Nothing left the schema accepts; treat as a no-op cloud success.
+        return { data: null, error: null, droppedColumns };
+      }
+      continue; // retry without the missing column
+    }
+
+    // A different error we can't recover from
+    return { data: null, error, droppedColumns };
+  }
+
+  return { data: null, error: null, droppedColumns };
+}
+
 export async function updateUserProfile(profileData) {
   // 1. Backend API
   try {
@@ -411,17 +451,24 @@ export async function updateUserProfile(profileData) {
     if (profileData.theme !== undefined) updatePayload.theme = profileData.theme;
     if (profileData.time_format !== undefined) updatePayload.time_format = profileData.time_format;
 
-    const { data, error } = await supabase
-      .from('users')
-      .update(updatePayload)
-      .eq('id', targetId)
-      .select();
-
+    const { data, error, droppedColumns } = await updateUsersResilient(targetId, updatePayload);
     if (error) throw new Error(error.message || 'Cloud update failed.');
-    const updated = formatUserFromDb(data && data[0] ? data[0] : { ...cachedUser, ...updatePayload });
+
+    // Columns the Supabase schema is missing were saved locally but not in the cloud.
+    // This happens when supabase/migration_profile_system.sql hasn't been run yet.
+    const merged = { ...cachedUser, ...updatePayload, ...(data && data[0] ? data[0] : {}) };
+    const updated = formatUserFromDb(merged);
     try {
       localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(updated));
     } catch (e) {}
+
+    if (droppedColumns.length > 0) {
+      return {
+        success: true,
+        user: updated,
+        message: `Saved. Note: ${droppedColumns.join(', ')} could not be stored in the cloud — run the profile migration (supabase/migration_profile_system.sql) in your Supabase SQL editor to enable full profile sync.`
+      };
+    }
     return { success: true, user: updated, message: 'Profile updated in cloud.' };
   }
 
