@@ -260,10 +260,7 @@ export function EmployeeWorkspace({
     }
 
     if (lastWsEvent.type === 'SESSION_TERMINATED' && isMatch(lastWsEvent.data?.userId)) {
-      setIsTerminated(true);
-      setIsTimerRunning(false);
-      setIsScreenTracking(false);
-      setTerminationReason(lastWsEvent.data.reason || 'Session terminated by AI Agent.');
+      endSession(lastWsEvent.data.reason || 'Session terminated by AI Agent.');
     }
 
     if (
@@ -443,24 +440,44 @@ export function EmployeeWorkspace({
     }
   };
 
-  // Handle 90-Minute Timer Completion
-  const handleTimerComplete = async () => {
-    setIsTimerRunning(false);
-    setIsTimerExpired(true);
-    setIsScreenTracking(false);
-
+  // Stop and finalize whichever recorder is active (web MediaRecorder or native
+  // MediaProjection), uploading the result, and release the screen wake lock.
+  // Safe to call when nothing is recording.
+  const teardownRecording = async () => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      // onstop -> uploadRecordedVideo, which only reports if >= MIN_REPORT_SECONDS
       mediaRecorderRef.current.stop();
     }
     if (isNativeRecordingRef.current) {
       setIsNativeRecording(false);
       await finalizeNativeRecording();
     }
-
     if (wakeLockRef.current) {
       wakeLockRef.current.release().catch(() => {});
       wakeLockRef.current = null;
     }
+  };
+
+  // End the sprint session (AI anomaly / founder termination): stop the timer,
+  // stop + upload the recording (a report is generated if >= MIN_REPORT_SECONDS),
+  // and mark the session terminated. Guarded so it only runs once.
+  const endSession = async (reason) => {
+    if (isTerminated) return;
+    setIsTerminated(true);
+    setIsTimerRunning(false);
+    setIsScreenTracking(false);
+    isScreenTrackingRef.current = false;
+    if (reason) setTerminationReason(reason);
+    await teardownRecording();
+  };
+
+  // Handle 90-Minute Timer Completion
+  const handleTimerComplete = async () => {
+    setIsTimerRunning(false);
+    setIsTimerExpired(true);
+    setIsScreenTracking(false);
+
+    await teardownRecording();
 
     if (workspaceData?.task?.id) {
       try {
@@ -761,10 +778,7 @@ export function EmployeeWorkspace({
     try {
       const data = await triggerAiActivityCheck(workspaceData.task.id, currentUser.id, warningCount);
       if (data && data.terminated) {
-        setIsTerminated(true);
-        setIsTimerRunning(false);
-        setIsScreenTracking(false);
-        setTerminationReason(chosenReason);
+        await endSession(chosenReason);
       } else if (data && data.warningCount) {
         setWarningCount(data.warningCount);
         setWarningMessage(data.warning?.message || 'Activity warning issued by AI Sentinel.');
