@@ -46,7 +46,7 @@ import { FounderEmployeeView } from './FounderEmployeeView';
 // 120 kbps * 5400 s ≈ 81MB. Screen content compresses well at a low frame rate.
 // ⚠️ TEST MODE: sprint shortened to 1 minute. For production 90-minute sprints,
 // set SPRINT_TOTAL_SECONDS back to 5400 and MIN_REPORT_SECONDS back to 600.
-const SPRINT_TOTAL_SECONDS = 60;   // TEST: was 5400 (90 min)
+const SPRINT_TOTAL_SECONDS = 90;   // TEST: was 5400 (90 min); now 1:30
 const MIN_REPORT_SECONDS = 60;     // TEST: was 600 (min elapsed before a report; now 1 min)
 const RECORDING_BITRATE = 120000;
 // Must fit the server's 100MB upload cap for a full 90-min sprint:
