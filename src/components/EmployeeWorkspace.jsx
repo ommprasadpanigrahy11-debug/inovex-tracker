@@ -385,11 +385,17 @@ export function EmployeeWorkspace({
       return;
     }
 
-    const elapsedSeconds = SPRINT_TOTAL_SECONDS - secondsRemaining;
+    // Compute elapsed from the authoritative end-time ref, not the secondsRemaining
+    // state: this runs from a timer callback captured at sprint start, where the
+    // state value would be stale (showing the full duration).
+    const remaining = targetEndTimeRef.current
+      ? Math.max(0, Math.round((targetEndTimeRef.current - Date.now()) / 1000))
+      : 0;
+    const elapsedSeconds = SPRINT_TOTAL_SECONDS - remaining;
     if (elapsedSeconds < MIN_REPORT_SECONDS) {
-      const mins = Math.floor(elapsedSeconds / 60);
+      const fmt = (s) => s >= 60 ? `${Math.round(s / 60)} min` : `${Math.round(s)}s`;
       setScreenCaptureError(
-        `Sprint ran ${mins} min — under the ${MIN_REPORT_SECONDS / 60}-minute minimum, so no audit report was generated and the recording was discarded.`
+        `Sprint ran ${fmt(elapsedSeconds)} — under the ${fmt(MIN_REPORT_SECONDS)} minimum, so no audit report was generated and the recording was discarded.`
       );
       return;
     }
