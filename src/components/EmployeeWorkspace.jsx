@@ -47,7 +47,7 @@ import { FounderEmployeeView } from './FounderEmployeeView';
 // ⚠️ TEST MODE: sprint shortened to 1 minute. For production 90-minute sprints,
 // set SPRINT_TOTAL_SECONDS back to 5400 and MIN_REPORT_SECONDS back to 600.
 const SPRINT_TOTAL_SECONDS = 60;   // TEST: was 5400 (90 min)
-const MIN_REPORT_SECONDS = 10;     // TEST: was 600 (10 min min before a report)
+const MIN_REPORT_SECONDS = 60;     // TEST: was 600 (min elapsed before a report; now 1 min)
 const RECORDING_BITRATE = 120000;
 // Must fit the server's 100MB upload cap for a full 90-min sprint:
 // 130 kbps * 5400 s / 8 ≈ 88MB. At maxDimension 1280 / 10 fps this is adequate
