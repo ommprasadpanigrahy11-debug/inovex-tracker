@@ -136,8 +136,9 @@ export function TelemetryGraphView({
         // Incorporate actual latest telemetry logs if available for this user on the final point
         if (i === numPoints - 1) {
           const userLog = telemetryLogs.find(l => l.user_id === node.id || l.user_name === node.name);
-          if (userLog && userLog.keystroke_rate) {
-            kps = +userLog.keystroke_rate.toFixed(1);
+          const loggedKps = Number(userLog?.keystroke_rate);
+          if (Number.isFinite(loggedKps) && loggedKps > 0) {
+            kps = +loggedKps.toFixed(1);
           }
           const userTask = healthMatrix.find(t => t.user_id === node.id || t.employee_name === node.name);
           if (userTask && userTask.ai_health_score) {

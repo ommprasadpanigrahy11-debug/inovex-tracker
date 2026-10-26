@@ -82,6 +82,7 @@ export function EmployeeWorkspace({
   const [screenStream, setScreenStream] = useState(null);
   const [activeWindow, setActiveWindow] = useState('VS Code — inovex-workflow.ts');
   const [keystrokes, setKeystrokes] = useState(46);
+  const keystrokesRef = useRef(46);
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
 
@@ -258,12 +259,14 @@ export function EmployeeWorkspace({
       currentUser.id,
       workspaceData?.task?.id || null,
       activeWindow,
-      keystrokes,
+      keystrokesRef.current,
       0
     ).catch(() => {});
 
     beatIntervalRef.current = setInterval(() => {
-      const nextKps = Math.max(18, Math.min(92, keystrokes + (Math.random() > 0.5 ? 4 : -4)));
+      // Read from ref: the interval closure would otherwise keep the value captured at arm time
+      const nextKps = Math.max(18, Math.min(92, keystrokesRef.current + (Math.random() > 0.5 ? 4 : -4)));
+      keystrokesRef.current = nextKps;
       setKeystrokes(nextKps);
       sendTelemetryBeat(
         currentUser.id,

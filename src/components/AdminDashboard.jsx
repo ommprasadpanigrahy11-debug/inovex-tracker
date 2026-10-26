@@ -27,6 +27,25 @@ import {
 import { fetchAdminData, dispatchSprintTask } from '../lib/dataService';
 import { TelemetryGraphView } from './TelemetryGraphView';
 
+// Founder dashboard re-syncs telemetry from the API on this cadence. Serverless hosts
+// (e.g. Vercel) have no WebSocket, so without polling the feed would never update.
+const TELEMETRY_POLL_MS = 10000;
+const MAX_TELEMETRY_LOGS = 35;
+
+// Prepend incoming logs, dropping duplicates (same beat delivered via WS and poll)
+function mergeTelemetryLogs(incoming, existing) {
+  const seen = new Set();
+  const merged = [];
+  for (const log of [...incoming, ...existing]) {
+    if (!log) continue;
+    const key = log.id || `${log.user_id}_${log.timestamp}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(log);
+  }
+  return merged.slice(0, MAX_TELEMETRY_LOGS);
+}
+
 export function AdminDashboard({ currentUser, lastWsEvent, activeTab, onInspectEmployee }) {
   const [gridUsers, setGridUsers] = useState([]);
   const [telemetryLogs, setTelemetryLogs] = useState([]);
@@ -69,7 +88,7 @@ export function AdminDashboard({ currentUser, lastWsEvent, activeTab, onInspectE
     if (pendingLogsRef.current.length > 0) {
       const logsToAdd = [...pendingLogsRef.current];
       pendingLogsRef.current = [];
-      setTelemetryLogs(prev => [...logsToAdd, ...prev].slice(0, 35));
+      setTelemetryLogs(prev => mergeTelemetryLogs(logsToAdd, prev));
     }
 
     if (pendingUserUpdatesRef.current.size > 0) {
@@ -127,9 +146,33 @@ export function AdminDashboard({ currentUser, lastWsEvent, activeTab, onInspectE
     }
   };
 
+  // Lightweight telemetry re-sync: refreshes feed + per-node telemetry without
+  // clobbering state when the backend is briefly unreachable
+  const pollTelemetry = async () => {
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+    try {
+      const data = await fetchAdminData();
+      if (!data || !Array.isArray(data.gridUsers) || data.gridUsers.length === 0) return;
+
+      const freshById = new Map(data.gridUsers.map(u => [u.id, u]));
+      setGridUsers(prev => prev.length === 0 ? data.gridUsers : prev.map(u => {
+        const fresh = freshById.get(u.id);
+        return fresh ? { ...u, status: fresh.status, telemetry: fresh.telemetry, active_task: fresh.active_task } : u;
+      }));
+      if (Array.isArray(data.telemetryLogs)) {
+        setTelemetryLogs(prev => mergeTelemetryLogs(data.telemetryLogs, prev)
+          .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)));
+      }
+    } catch (err) {
+      console.warn('Telemetry poll failed', err);
+    }
+  };
+
   useEffect(() => {
     fetchDashboardData();
+    const pollTimer = setInterval(pollTelemetry, TELEMETRY_POLL_MS);
     return () => {
+      clearInterval(pollTimer);
       if (throttleTimerRef.current) clearTimeout(throttleTimerRef.current);
     };
   }, []);
@@ -148,7 +191,7 @@ export function AdminDashboard({ currentUser, lastWsEvent, activeTab, onInspectE
     if (lastWsEvent.type === 'HARDWARE_SPOOF_ALERT') {
       // Priority instant dispatch for critical hardware security alerts
       const newLog = lastWsEvent.data.log || lastWsEvent.data;
-      setTelemetryLogs(prev => [newLog, ...prev.slice(0, 35)]);
+      setTelemetryLogs(prev => mergeTelemetryLogs([newLog], prev));
       setGridUsers(prev => prev.map(u => {
         if (u.id === newLog.user_id) {
           return {
