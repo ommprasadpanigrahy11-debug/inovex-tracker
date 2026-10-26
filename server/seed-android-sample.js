@@ -30,7 +30,7 @@ db.prepare(`
   'android',
   'android_sprint_sample.webm',
   '/recordings/android_sprint_sample.webm',
-  5400,
+  1800,
   88,
   1,
   JSON.stringify([

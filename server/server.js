@@ -37,7 +37,7 @@ if (!fs.existsSync(avatarsDir)) {
   fs.mkdirSync(avatarsDir, { recursive: true });
 }
 
-// Multer storage for 90-minute recordings with strict validation
+// Multer storage for 30-minute recordings with strict validation
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, recordingsDir);
@@ -1347,7 +1347,7 @@ app.post('/api/tasks/ai-dispatch', requireAuth, requireFounder, (req, res) => {
     const cleanDesc = (description && String(description).trim()) || prompt;
     const computedHealth = 95;
 
-    const briefContent = `[AUTONOMOUS DISPATCH DIRECTIVE]\nTarget: ${titleSnippet}\n\nSPECIFICATION:\n${cleanDesc}\n\nEXECUTION CONSTRAINTS:\n- 90-minute strict checkpoint burst.\n- Real-time telemetry monitoring enabled.\n- Proof submission required before checkpoint expiry.`;
+    const briefContent = `[AUTONOMOUS DISPATCH DIRECTIVE]\nTarget: ${titleSnippet}\n\nSPECIFICATION:\n${cleanDesc}\n\nEXECUTION CONSTRAINTS:\n- 30-minute strict checkpoint burst.\n- Real-time telemetry monitoring enabled.\n- Proof submission required before checkpoint expiry.`;
     const webhookUrl = `https://api.lexven.internal/v1/pow-hook/${taskId}`;
 
     db.prepare(`
@@ -1355,7 +1355,7 @@ app.post('/api/tasks/ai-dispatch', requireAuth, requireFounder, (req, res) => {
         id, assigned_to, title, description, brief_content, status, 
         ai_health_score, proof_of_work_webhook, checkpoint_timer, 
         sprint_started_at, is_acknowledged, created_at
-      ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, 5400, NULL, 0, ?)
+      ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, 1800, NULL, 0, ?)
     `).run(taskId, targetEmployee.id, titleSnippet, cleanDesc, briefContent, computedHealth, webhookUrl, Date.now());
 
     const createdTask = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
@@ -1374,7 +1374,7 @@ app.post('/api/tasks/ai-dispatch', requireAuth, requireFounder, (req, res) => {
       dispatchLog: [
         'Agent [Analyzer]: Deconstructed project specs into 1 micro-sprint burst.',
         `Agent [Router]: Evaluated employee workload matrix. Assigned to ${targetEmployee.name}.`,
-        `Agent [Sentinel]: Seeded 90-minute Checkpoint Timer with Webhook: ${webhookUrl}.`,
+        `Agent [Sentinel]: Seeded 30-minute Checkpoint Timer with Webhook: ${webhookUrl}.`,
         'Status: Queued in employee workspace awaiting acceptance acknowledgment.'
       ]
     });
@@ -1407,7 +1407,7 @@ app.post('/api/tasks/assign', requireAuth, requireFounder, (req, res) => {
         id, assigned_to, title, description, brief_content, status, 
         ai_health_score, proof_of_work_webhook, checkpoint_timer, 
         sprint_started_at, is_acknowledged, deadline, created_at
-      ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, 5400, NULL, 0, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, 1800, NULL, 0, ?, ?)
     `).run(
       taskId, 
       employee.id, 
@@ -1561,7 +1561,7 @@ app.get('/api/employee/dashboard', requireAuth, (req, res) => {
   handleWorkspaceRequest(req, res, targetId);
 });
 
-// Start 90-Minute Fixed Sprint & Screen Tracking (Employee Only)
+// Start 30-Minute Fixed Sprint & Screen Tracking (Employee Only)
 app.post('/api/workspace/start-sprint', requireAuth, (req, res) => {
   const { taskId, userId } = req.body;
   if (userId && String(userId).trim() !== req.user.id && req.user.role !== 'founder') {
@@ -1585,7 +1585,7 @@ app.post('/api/workspace/start-sprint', requireAuth, (req, res) => {
       SET is_acknowledged = 1, 
           status = 'active', 
           sprint_started_at = ?, 
-          checkpoint_timer = 5400,
+          checkpoint_timer = 1800,
           screen_tracking_active = 1,
           warning_count = 0,
           session_terminated = 0
@@ -1608,7 +1608,7 @@ app.post('/api/workspace/start-sprint', requireAuth, (req, res) => {
       employeeName: req.user.name,
       sprint_started_at: now,
       screen_tracking_active: 1,
-      message: `Employee ${req.user.name} initiated 90-Minute sprint. Screen tracking and AI agent monitoring active.`
+      message: `Employee ${req.user.name} initiated 30-Minute sprint. Screen tracking and AI agent monitoring active.`
     }, { recipientUserId: effectiveUserId });
 
     res.json({ success: true, task: updatedTask });
@@ -1703,7 +1703,7 @@ app.post('/api/workspace/ai-activity-check', requireAuth, (req, res) => {
         return res.json({ success: true, warningCount: 2, terminated: false, warning: warningPayload });
       } else {
         // Infraction 3 -> Terminate Session!
-        const terminationReason = infractionReason || 'Multiple uncorrected activity infractions during 90-minute sprint.';
+        const terminationReason = infractionReason || 'Multiple uncorrected activity infractions during 30-minute sprint.';
         db.prepare(`
           UPDATE tasks 
           SET session_terminated = 1, 
@@ -1734,7 +1734,7 @@ app.post('/api/workspace/ai-activity-check', requireAuth, (req, res) => {
   }
 });
 
-// 90-minute Timer Reaches 00:00 -> Automatically turn off timer and tracking, advance to 'review'
+// 30-minute Timer Reaches 00:00 -> Automatically turn off timer and tracking, advance to 'review'
 app.post('/api/workspace/timer-complete', requireAuth, (req, res) => {
   const { taskId } = req.body;
   if (!taskId) return res.status(400).json({ error: 'taskId is required.' });
@@ -1759,7 +1759,7 @@ app.post('/api/workspace/timer-complete', requireAuth, (req, res) => {
     broadcast('TIMER_COMPLETED', {
       taskId,
       userId: task.assigned_to,
-      message: '90-minute burst completed. Timer and screen tracking stopped. Work submission pending.'
+      message: '30-minute burst completed. Timer and screen tracking stopped. Work submission pending.'
     }, { recipientUserId: task.assigned_to });
 
     res.json({ success: true, completed: true });
@@ -1829,7 +1829,7 @@ app.post('/api/workspace/lockout', requireAuth, (req, res) => {
     broadcast('BURST_TIMEOUT_LOCKOUT', {
       taskId,
       userId,
-      message: `CRITICAL: 90-minute Checkpoint Timer expired without submission! Employee UI Locked.`
+      message: `CRITICAL: 30-minute Checkpoint Timer expired without submission! Employee UI Locked.`
     }, { recipientUserId: userId });
 
     res.json({ success: true, locked: true });
@@ -1872,7 +1872,7 @@ app.post('/api/recordings/upload', requireAuth, uploadLimiter, upload.single('vi
     }
     const auditId = 'aud_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
     const videoUrl = `/recordings/${filename}`;
-    const duration = parseInt(durationSeconds, 10) || 5400; // 90 mins (5400s) default
+    const duration = parseInt(durationSeconds, 10) || 1800; // 30 mins (1800s) default
     const devType = deviceType || 'desktop';
 
     // AI AGENT AUDIT ENGINE:
@@ -1938,7 +1938,7 @@ app.post('/api/recordings/upload', requireAuth, uploadLimiter, upload.single('vi
     const anomalyCount = anomalies.length;
 
     let verdict = 'CLEAN_VERIFIED';
-    let aiSummary = 'AI Agent audited the full 90-minute screen recording. Activity aligned with assigned sprint directive. Continuous input entropy confirmed.';
+    let aiSummary = 'AI Agent audited the full 30-minute screen recording. Activity aligned with assigned sprint directive. Continuous input entropy confirmed.';
 
     if (anomalyCount > 0 && finalHealthScore < 70) {
       verdict = 'CRITICAL_ANOMALIES';
@@ -1992,12 +1992,12 @@ app.post('/api/recordings/upload', requireAuth, uploadLimiter, upload.single('vi
         anomalies,
         focusBreakdown
       },
-      message: `AI Agent completed 90-min video audit for ${req.user.name} (${devType.toUpperCase()}). Verdict: ${verdict}`
+      message: `AI Agent completed 30-min video audit for ${req.user.name} (${devType.toUpperCase()}). Verdict: ${verdict}`
     }, { recipientUserId: req.user.id });
 
     res.json({
       success: true,
-      message: '90-minute recording received and audited by AI Agent.',
+      message: '30-minute recording received and audited by AI Agent.',
       audit: {
         ...auditRecord,
         anomalies,

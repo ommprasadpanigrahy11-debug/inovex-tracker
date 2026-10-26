@@ -51,7 +51,7 @@ db.exec(`
     status TEXT NOT NULL CHECK(status IN ('pending', 'active', 'review', 'verified')),
     ai_health_score INTEGER DEFAULT 85 CHECK(ai_health_score >= 0 AND ai_health_score <= 100),
     proof_of_work_webhook TEXT,
-    checkpoint_timer INTEGER DEFAULT 5400,
+    checkpoint_timer INTEGER DEFAULT 1800,
     sprint_started_at INTEGER,
     is_acknowledged INTEGER DEFAULT 0,
     brief_content TEXT,
@@ -100,7 +100,7 @@ try {
         status TEXT NOT NULL,
         ai_health_score INTEGER DEFAULT 85,
         proof_of_work_webhook TEXT,
-        checkpoint_timer INTEGER DEFAULT 5400,
+        checkpoint_timer INTEGER DEFAULT 1800,
         sprint_started_at INTEGER,
         is_acknowledged INTEGER DEFAULT 0,
         brief_content TEXT,
@@ -223,7 +223,7 @@ try {
   db.prepare("UPDATE tasks SET status = 'review' WHERE status IN ('done', 'completed')").run();
 } catch (e) {}
 
-// 4. Sprint Audits Table (Stores 90-Min Recordings & AI Agent Anomaly Audits)
+// 4. Sprint Audits Table (Stores 30-Min Recordings & AI Agent Anomaly Audits)
 db.exec(`
   CREATE TABLE IF NOT EXISTS sprint_audits (
     id TEXT PRIMARY KEY,
@@ -233,7 +233,7 @@ db.exec(`
     device_type TEXT DEFAULT 'desktop',
     video_filename TEXT NOT NULL,
     video_url TEXT NOT NULL,
-    duration_seconds INTEGER DEFAULT 5400,
+    duration_seconds INTEGER DEFAULT 1800,
     ai_health_score INTEGER DEFAULT 85,
     anomaly_count INTEGER DEFAULT 0,
     anomalies_json TEXT,
@@ -338,11 +338,12 @@ export function syncSupabaseProductionUsers() {
 }
 syncSupabaseProductionUsers();
 
-// Helper to determine whether demo seeding is permitted: strictly disabled in production
+// Demo seeding is strictly opt-in: it never runs in production, and otherwise
+// only when SEED_DEMO_DATA=true is set explicitly. This keeps the database a
+// clean slate by default so old dummy data is never reintroduced on startup.
 export function canSeedDemoData(env = process.env) {
-  const isProduction = env.NODE_ENV === 'production';
-  if (isProduction) return false;
-  return env.SEED_DEMO_DATA === 'true' || (env.NODE_ENV !== 'test' && env.SEED_DEMO_DATA !== 'false');
+  if (env.NODE_ENV === 'production') return false;
+  return env.SEED_DEMO_DATA === 'true';
 }
 
 // Automatic Seed if database has zero users - strictly disabled in production
@@ -391,7 +392,7 @@ if (count === 0 && canSeedDemoData()) {
       'active',
       94,
       'https://api.lexven.internal/v1/pow-hook/tsk_001',
-      5400,
+      1800,
       now - 1200000,
       1,
       new Date(now + 4 * 3600 * 1000).toISOString(), // 4 hours deadline
@@ -406,7 +407,7 @@ if (count === 0 && canSeedDemoData()) {
       'active',
       42,
       'https://api.lexven.internal/v1/pow-hook/tsk_002',
-      5400,
+      1800,
       now - 3400000,
       1,
       new Date(now + 2 * 3600 * 1000).toISOString(), // 2 hours deadline
@@ -421,7 +422,7 @@ if (count === 0 && canSeedDemoData()) {
       'pending',
       88,
       'https://api.lexven.internal/v1/pow-hook/tsk_003',
-      5400,
+      1800,
       null,
       0,
       new Date(now + 24 * 3600 * 1000).toISOString(), // 24 hours deadline
@@ -436,7 +437,7 @@ if (count === 0 && canSeedDemoData()) {
       'done',
       98,
       'https://api.lexven.internal/v1/pow-hook/tsk_004',
-      5400,
+      1800,
       now - 5000000,
       1,
       new Date(now - 1000000).toISOString(), // Completed before deadline
@@ -459,7 +460,7 @@ if (count === 0 && canSeedDemoData()) {
   insertLog.run('log_003', 'usr_emp_03', 'tsk_003', now - 10000, 'Terminal - cargo build --release', 62.1, 0, null);
   insertLog.run('log_004', 'usr_emp_04', 'tsk_004', now - 5000, 'Chrome - PR #302 Xero Memory Index', 24.0, 0, null);
 
-  // Pre-seed initial 90-minute screen recording AI audit
+  // Pre-seed initial 30-minute screen recording AI audit
   const insertAudit = db.prepare(`
     INSERT INTO sprint_audits (
       id, task_id, user_id, employee_name, device_type, video_filename, video_url,
@@ -474,9 +475,9 @@ if (count === 0 && canSeedDemoData()) {
     'usr_emp_01',
     'Alex Mercer (Agentic Eng)',
     'desktop',
-    'sprint_usr_emp_01_90min.webm',
-    '/recordings/sprint_usr_emp_01_90min.webm',
-    5400,
+    'sprint_usr_emp_01_30min.webm',
+    '/recordings/sprint_usr_emp_01_30min.webm',
+    1800,
     94,
     0,
     JSON.stringify([
@@ -486,7 +487,7 @@ if (count === 0 && canSeedDemoData()) {
       { timeOffsetSec: 5310, timeFormatted: '88:30', type: 'sprint_completion', description: 'Sprint deliverable packaged and verified by AI Sentinel', severity: 'nominal' }
     ]),
     JSON.stringify({ sprint_work: 88, docs_research: 8, flagged_or_idle: 4 }),
-    'AI Agent completed deep neural inspection of the 90-minute screen recording for Alex Mercer. Continuous IDE development detected (88%) with sustained input entropy and zero unauthorized macro injections.',
+    'AI Agent completed deep neural inspection of the 30-minute screen recording for Alex Mercer. Continuous IDE development detected (88%) with sustained input entropy and zero unauthorized macro injections.',
     'CLEAN_VERIFIED',
     now - 3600000
   );

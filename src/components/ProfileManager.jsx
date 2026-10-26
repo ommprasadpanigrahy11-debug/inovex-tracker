@@ -925,7 +925,7 @@ export function ProfileManager({
                   <div style={{ padding: '12px', background: 'var(--bg)', borderRadius: '8px', border: '1px solid var(--line)' }}>
                     <strong style={{ color: 'var(--ink)' }}>Visible to Executive Founders:</strong>
                     <p style={{ marginTop: '3px' }}>
-                      Full telemetry streams (active window title, keystroke cadence/rate, hardware MAC address), 90-minute screen recording audits, proof-of-work submissions, and AI health scores.
+                      Full telemetry streams (active window title, keystroke cadence/rate, hardware MAC address), 30-minute screen recording audits, proof-of-work submissions, and AI health scores.
                     </p>
                   </div>
 
@@ -1025,7 +1025,7 @@ export function ProfileManager({
                 <div className="notif-row">
                   <div className="notif-meta">
                     <div className="notif-title">Sprint Deadlines & Checkpoints</div>
-                    <div className="notif-desc">Warn when a 90-minute sprint burst timer is approaching expiration.</div>
+                    <div className="notif-desc">Warn when a 30-minute sprint burst timer is approaching expiration.</div>
                   </div>
                   <label className="toggle-switch">
                     <input 
@@ -1129,10 +1129,10 @@ export function ProfileManager({
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', fontSize: '13px', lineHeight: 1.5 }}>
                   <div style={{ background: 'var(--bg)', padding: '14px', borderRadius: '10px', border: '1px solid var(--line)' }}>
                     <div style={{ fontWeight: 600, color: 'var(--ink)', marginBottom: '4px' }}>
-                      1. How does the 90-Minute Sprint Checkpoint work?
+                      1. How does the 30-Minute Sprint Checkpoint work?
                     </div>
                     <p style={{ color: 'var(--muted)' }}>
-                      Each sprint burst runs for exactly 5,400 seconds (90 minutes). During an active sprint, periodic zero-latency telemetry packets verify IDE activity and keystroke cadence. Once complete, attach your proof of work (git commit or PR link) and submit for founder verification.
+                      Each sprint burst runs for exactly 1,800 seconds (30 minutes). During an active sprint, periodic zero-latency telemetry packets verify IDE activity and keystroke cadence. Once complete, attach your proof of work (git commit or PR link) and submit for founder verification.
                     </p>
                   </div>
 

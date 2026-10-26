@@ -274,7 +274,7 @@ export function AdminDashboard({ currentUser, lastWsEvent, activeTab, onInspectE
           setDispatchLogs(prev => [
             ...prev,
             `CapacityMatcher matched directive to node: ${assignedUserObj?.name || 'Assigned Engineering Node'} (${assignedUserObj?.email || assignedUserObj?.device_mac_address || 'Enclave Node'})`,
-            `90-minute burst sprint checkpoint initialized.`,
+            `30-minute burst sprint checkpoint initialized.`,
             `Sprint dispatched successfully to engineering node.`
           ]);
           setIsDispatching(false);
@@ -499,7 +499,7 @@ export function AdminDashboard({ currentUser, lastWsEvent, activeTab, onInspectE
             <div className="section-kicker">Action 01 • Multi-Agent Router</div>
             <h3 className="demo-shell-title">Autonomous Sprint Dispatcher</h3>
             <p className="demo-shell-sub">
-              Enter raw requirements. Our capacity matching pipeline assigns the task to the optimal node and generates a 90-minute burst checkpoint.
+              Enter raw requirements. Our capacity matching pipeline assigns the task to the optimal node and generates a 30-minute burst checkpoint.
             </p>
 
             {/* Pipeline Stage Indicators */}
@@ -744,7 +744,7 @@ export function AdminDashboard({ currentUser, lastWsEvent, activeTab, onInspectE
         </div>
       </div>
 
-      {/* 5. 90-MINUTE SPRINT VIDEO AUDITS & AI ANOMALY REPORTS (Action 3) */}
+      {/* 5. 30-MINUTE SPRINT VIDEO AUDITS & AI ANOMALY REPORTS (Action 3) */}
       <div id="section-audits" className="audits-section">
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px', marginBottom: '8px' }}>
           <div>
@@ -753,7 +753,7 @@ export function AdminDashboard({ currentUser, lastWsEvent, activeTab, onInspectE
               Sprint Video Audits & AI Anomaly Reports
             </h2>
             <p style={{ color: 'var(--muted)', fontSize: '14px', maxWidth: '780px', marginTop: '4px' }}>
-              Full 90-minute employee screen recordings captured automatically across Desktop Native and Android Mobile nodes. 
+              Full 30-minute employee screen recordings captured automatically across Desktop Native and Android Mobile nodes. 
               Each session is processed through the AI Agent to detect unapproved application shifts, hardware spoofing, and idle intervals.
             </p>
           </div>
@@ -767,9 +767,9 @@ export function AdminDashboard({ currentUser, lastWsEvent, activeTab, onInspectE
         {sprintAudits.length === 0 ? (
           <div style={{ background: 'var(--card)', border: '1px dashed var(--line)', borderRadius: 'var(--radius)', padding: '36px', textAlign: 'center', marginTop: '20px' }}>
             <Video size={32} style={{ color: 'var(--muted-2)', marginBottom: '12px' }} />
-            <h4 style={{ fontSize: '16px', color: 'var(--ink)', marginBottom: '6px' }}>Awaiting First 90-Minute Sprint Submission</h4>
+            <h4 style={{ fontSize: '16px', color: 'var(--ink)', marginBottom: '6px' }}>Awaiting First 30-Minute Sprint Submission</h4>
             <p style={{ fontSize: '13px', color: 'var(--muted)', maxWidth: '540px', margin: '0 auto' }}>
-              When an employee node initiates their 90-minute timer on Desktop or Android, screen tracking records the entire sprint. 
+              When an employee node initiates their 30-minute timer on Desktop or Android, screen tracking records the entire sprint. 
               The AI Agent will audit the video upon completion and surface timestamped anomaly reports here.
             </p>
           </div>
@@ -779,7 +779,7 @@ export function AdminDashboard({ currentUser, lastWsEvent, activeTab, onInspectE
               const isAndroid = audit.device_type === 'android';
               const isClean = audit.verdict === 'CLEAN_VERIFIED';
               const isCritical = audit.verdict === 'CRITICAL_ANOMALIES';
-              const durationMins = Math.round((audit.duration_seconds || 5400) / 60);
+              const durationMins = Math.round((audit.duration_seconds || 1800) / 60);
 
               const breakdown = audit.focusBreakdown || {
                 sprint_work: 85,
@@ -927,7 +927,7 @@ export function AdminDashboard({ currentUser, lastWsEvent, activeTab, onInspectE
                         </span>
                       </div>
                       <span className="mono" style={{ fontSize: '11px', color: '#64748b' }}>
-                        Duration: {Math.round((selectedAudit.duration_seconds || 5400) / 60)}m 00s
+                        Duration: {Math.round((selectedAudit.duration_seconds || 1800) / 60)}m 00s
                       </span>
                     </div>
 

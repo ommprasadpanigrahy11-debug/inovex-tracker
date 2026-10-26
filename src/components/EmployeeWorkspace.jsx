@@ -42,16 +42,11 @@ import {
 } from '../lib/nativeScreenRecorder';
 import { FounderEmployeeView } from './FounderEmployeeView';
 
-// Screen recordings must fit the server's 100MB upload cap for a full 90-minute sprint:
-// 120 kbps * 5400 s ≈ 81MB. Screen content compresses well at a low frame rate.
-// ⚠️ TEST MODE: sprint shortened to 1 minute. For production 90-minute sprints,
-// set SPRINT_TOTAL_SECONDS back to 5400 and MIN_REPORT_SECONDS back to 600.
-const SPRINT_TOTAL_SECONDS = 90;   // TEST: was 5400 (90 min); now 1:30
-const MIN_REPORT_SECONDS = 60;     // TEST: was 600 (min elapsed before a report; now 1 min)
+const SPRINT_TOTAL_SECONDS = 1800; // 30-minute sprint
+const MIN_REPORT_SECONDS = 600;    // generate an audit only if >= 10 minutes elapsed
+// Recordings stay well under the server's 100MB cap: 120 kbps * 1800 s ≈ 27MB.
 const RECORDING_BITRATE = 120000;
-// Must fit the server's 100MB upload cap for a full 90-min sprint:
-// 130 kbps * 5400 s / 8 ≈ 88MB. At maxDimension 1280 / 10 fps this is adequate
-// for H.264 monitoring footage.
+// Native H.264 at 130 kbps * 1800 s ≈ 29MB, maxDimension 1280 / 10 fps.
 const RECORDING_BITRATE_NATIVE = 130000;
 const CAPTURE_FRAME_RATE = { ideal: 10, max: 15 };
 const RECORDING_MIME_CANDIDATES = [
@@ -98,7 +93,7 @@ export function EmployeeWorkspace({
   const [selectedTaskId, setSelectedTaskId] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // Fixed 90-min Timer State (5400 seconds fixed)
+  // Fixed 30-min Timer State (1800 seconds fixed)
   const [secondsRemaining, setSecondsRemaining] = useState(SPRINT_TOTAL_SECONDS);
   const [isTimerRunning, setIsTimerRunning] = useState(false);
   const [isTimerExpired, setIsTimerExpired] = useState(false);
@@ -192,7 +187,7 @@ export function EmployeeWorkspace({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submissionSuccess, setSubmissionSuccess] = useState(false);
 
-  // 90-Minute Screen Video Recording & AI Audit State
+  // 30-Minute Screen Video Recording & AI Audit State
   const mediaRecorderRef = useRef(null);
   const recordedChunksRef = useRef([]);
   const [isUploadingRecording, setIsUploadingRecording] = useState(false);
@@ -282,7 +277,7 @@ export function EmployeeWorkspace({
     }
   }, [lastWsEvent, currentUser?.id, currentUser?.email]);
 
-  // Timestamp-based 90-Minute Countdown (Immune to browser background throttle and drift)
+  // Timestamp-based 30-Minute Countdown (Immune to browser background throttle and drift)
   useEffect(() => {
     if (!isTimerRunning || isTerminated) return;
 
@@ -377,7 +372,7 @@ export function EmployeeWorkspace({
 
   // Upload a finalized sprint video blob to the backend for the AI anomaly audit.
   // A report is only generated once at least MIN_REPORT_SECONDS have elapsed; a
-  // full 90-minute sprint always qualifies, and an early stop qualifies after 10
+  // full 30-minute sprint always qualifies, and an early stop qualifies after 10
   // minutes. Shorter sessions are discarded (no report, recording dropped).
   const uploadSprintVideo = async (videoBlob, { native = false } = {}) => {
     if (!videoBlob || videoBlob.size === 0) {
@@ -479,7 +474,7 @@ export function EmployeeWorkspace({
     await teardownRecording();
   };
 
-  // Handle 90-Minute Timer Completion
+  // Handle 30-Minute Timer Completion
   const handleTimerComplete = async () => {
     setIsTimerRunning(false);
     setIsTimerExpired(true);
@@ -501,7 +496,7 @@ export function EmployeeWorkspace({
     }
   };
 
-  // Start Sprint (90 minutes fixed)
+  // Start Sprint (30 minutes fixed)
   const executeStartSprint = async () => {
     try {
       const currentTaskId = workspaceData?.task?.id || null;
@@ -925,7 +920,7 @@ export function EmployeeWorkspace({
             </div>
             <p style={{ fontSize: '14px', color: 'var(--muted)', lineHeight: '1.6', marginBottom: '18px' }}>
               Our AI monitoring agent detected multiple uncorrected infractions after issuing 2 formal warnings. 
-              As per security policy, this 90-minute sprint session was terminated automatically.
+              As per security policy, this 30-minute sprint session was terminated automatically.
             </p>
 
             <div style={{ background: 'var(--card)', border: '1px solid var(--line)', borderRadius: '8px', padding: '14px 16px', fontSize: '12px', fontFamily: 'var(--font-mono)', color: 'var(--ink)', marginBottom: '20px' }}>
@@ -995,10 +990,10 @@ export function EmployeeWorkspace({
       <div className="page-hero" style={{ padding: '18px 0 16px', marginBottom: '20px' }}>
         <div className="section-kicker" style={{ marginBottom: '8px' }}>Employee Focused Workspace</div>
         <h1 className="hero-title" style={{ fontSize: '28px', marginBottom: '6px' }}>
-          90-Minute Sprint & <span className="accent">Screen Sentinel</span>
+          30-Minute Sprint & <span className="accent">Screen Sentinel</span>
         </h1>
         <p className="hero-subtitle" style={{ fontSize: '14px', marginBottom: '8px' }}>
-          Screen tracking engages automatically when you start the 90-minute timer. Our AI agent evaluates activity in real-time.
+          Screen tracking engages automatically when you start the 30-minute timer. Our AI agent evaluates activity in real-time.
         </p>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginTop: '6px' }}>
           <span className="badge active" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '11px', padding: '4px 10px' }}>
@@ -1178,18 +1173,18 @@ export function EmployeeWorkspace({
       {/* Main Workspace 2-Column Balanced Layout (Responsive on Mobile/Android) */}
       <div className="workspace-split">
         
-        {/* LEFT COLUMN: 90-MIN TIMER & SCREEN TRACKING CONSOLE */}
+        {/* LEFT COLUMN: 30-MIN TIMER & SCREEN TRACKING CONSOLE */}
         <div>
-          {/* 1. FIXED 90-MIN TIMER CARD */}
+          {/* 1. FIXED 30-MIN TIMER CARD */}
           <div className="burst-timer-card" style={{ padding: '24px 22px', marginBottom: '18px', flexDirection: 'column', alignItems: 'stretch', gap: '16px' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div className="specimen-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', margin: 0 }}>
                 <Clock size={13} style={{ color: 'var(--accent-strong)' }} />
-                <span>Fixed 90-Minute Sprint</span>
+                <span>Fixed 30-Minute Sprint</span>
               </div>
               <span className={`badge ${isTimerRunning ? 'active' : isTimerExpired ? 'waiting' : 'waiting'}`}>
                 <span className="badge-dot"></span>
-                {isTimerRunning ? 'Active (Cannot Pause)' : isTimerExpired ? '90 Min Reached' : 'Timer Standby'}
+                {isTimerRunning ? 'Active (Cannot Pause)' : isTimerExpired ? '30 Min Reached' : 'Timer Standby'}
               </span>
             </div>
 
@@ -1199,7 +1194,7 @@ export function EmployeeWorkspace({
               </div>
               <div className="mono" style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '4px' }}>
                 {isTimerRunning 
-                  ? 'Continuous 90-min burst • Pause/cancel disabled'
+                  ? 'Continuous 30-min burst • Pause/cancel disabled'
                   : isTimerExpired 
                   ? 'Sprint ended. Work submission ready below.'
                   : 'Timer starts together with screen tracking'}
@@ -1216,7 +1211,7 @@ export function EmployeeWorkspace({
                   id="btn-start-sprint"
                 >
                   <Play size={16} />
-                  <span>Start 90-Minute Sprint</span>
+                  <span>Start 30-Minute Sprint</span>
                 </button>
               )}
 
@@ -1224,7 +1219,7 @@ export function EmployeeWorkspace({
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                   <div style={{ background: 'var(--bg)', border: '1px solid var(--line)', borderRadius: '8px', padding: '10px 12px', fontSize: '12px', color: 'var(--muted)', textAlign: 'center' }}>
                     <Lock size={12} style={{ display: 'inline', marginRight: '6px', verticalAlign: '-1px' }} />
-                    Sprint locked for 90 minutes. Screen tracking active.
+                    Sprint locked for 30 minutes. Screen tracking active.
                   </div>
 
                   {/* AI Agent Unusual Activity Simulation Trigger */}
@@ -1242,7 +1237,7 @@ export function EmployeeWorkspace({
 
               {isTimerExpired && (
                 <div style={{ background: 'var(--accent-tint-2)', border: '1px solid rgba(95, 115, 72, 0.25)', borderRadius: '8px', padding: '10px', textAlign: 'center', fontSize: '12px', color: 'var(--accent-strong)', fontWeight: '500' }}>
-                  ✓ 90 minutes completed. Timer closed. Please submit your deliverables.
+                  ✓ 30 minutes completed. Timer closed. Please submit your deliverables.
                 </div>
               )}
             </div>
@@ -1506,7 +1501,7 @@ export function EmployeeWorkspace({
                 </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '12px', color: 'var(--muted)' }}>
-                  <span>Sprint Duration: <strong>90 Minutes Fixed</strong></span>
+                  <span>Sprint Duration: <strong>30 Minutes Fixed</strong></span>
                   <span className="mono" style={{ fontSize: '11px' }}>Task ID: {currentTask.id}</span>
                 </div>
               </div>
@@ -1538,11 +1533,11 @@ export function EmployeeWorkspace({
                     {/* AI Agent Audit Summary Badge */}
                     <div style={{ background: 'var(--card)', border: '1px solid var(--line)', borderRadius: '8px', padding: '12px 16px', textAlign: 'left', marginTop: '10px' }}>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
-                        <span className="specimen-label" style={{ margin: 0 }}>AI Agent 90-Min Video Audit</span>
+                        <span className="specimen-label" style={{ margin: 0 }}>AI Agent 30-Min Video Audit</span>
                         <span className="badge active">Submitted to Founder</span>
                       </div>
                       <div style={{ fontSize: '12px', color: 'var(--ink)', lineHeight: '1.5' }}>
-                        {aiAuditReport?.ai_summary || '90-minute screen footage analyzed by AI Sentinel. Activity patterns, focus distribution, and zero-loss input entropy submitted to Founder Dashboard.'}
+                        {aiAuditReport?.ai_summary || '30-minute screen footage analyzed by AI Sentinel. Activity patterns, focus distribution, and zero-loss input entropy submitted to Founder Dashboard.'}
                       </div>
                       <div style={{ display: 'flex', gap: '16px', marginTop: '8px', fontSize: '11px', fontFamily: 'var(--font-mono)', color: 'var(--muted-2)' }}>
                         <span>Anomalies Flagged: <strong style={{ color: 'var(--accent-strong)' }}>{aiAuditReport?.anomaly_count ?? 0}</strong></span>
@@ -1586,7 +1581,7 @@ export function EmployeeWorkspace({
 
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                       <span className="mono" style={{ fontSize: '11px', color: 'var(--muted-2)' }}>
-                        {isTimerRunning ? 'You can submit early or at the 90-min mark' : 'Submission required after 90 mins'}
+                        {isTimerRunning ? 'You can submit early or at the 30-min mark' : 'Submission required after 30 mins'}
                       </span>
                       <button 
                         type="submit"

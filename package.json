@@ -13,7 +13,8 @@
     "build": "vite build && npx cap copy android",
     "build:web": "vite build",
     "vercel-build": "vite build",
-    "test": "node server/test-auth-and-api.js",
+    "pretest": "node -e \"const fs=require('node:fs');['','-wal','-shm','-journal'].forEach(s=>fs.rmSync('server/data/test-antigravity.db'+s,{force:true}))\"",
+    "test": "node --env-file=server/test.env server/test-auth-and-api.js",
     "start": "node server/server.js"
   },
   "dependencies": {

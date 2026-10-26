@@ -104,7 +104,7 @@ export async function broadcastTelemetryEvent(eventType, data) {
 }
 
 // ==============================================================================
-// 90-MINUTE SCREEN VIDEO RECORDING UPLOAD & POST-MONITORING AI AUDIT
+// 30-MINUTE SCREEN VIDEO RECORDING UPLOAD & POST-MONITORING AI AUDIT
 // ==============================================================================
 export async function uploadRecordingToSupabase(videoBlob, metadata) {
   if (!(videoBlob instanceof Blob) || videoBlob.size < 512) {
@@ -112,7 +112,7 @@ export async function uploadRecordingToSupabase(videoBlob, metadata) {
   }
 
   const now = Date.now();
-  const durationSec = metadata.durationSeconds || 5400;
+  const durationSec = metadata.durationSeconds || 1800;
   const token = localStorage.getItem('inovex_auth_token') || '';
   const contentType = (videoBlob.type || 'video/webm').split(';')[0];
   const ext = contentType === 'video/mp4' ? 'mp4' : 'webm';

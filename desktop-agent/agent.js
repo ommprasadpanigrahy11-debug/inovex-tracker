@@ -3,7 +3,7 @@
  * Inovex Tracker - Standalone Desktop Agent (No Web Browser Required)
  * 
  * Features:
- *  - Enforces strict 90-minute sprint countdown (5,400s)
+ *  - Enforces strict 30-minute sprint countdown (1,800s)
  *  - Authenticates with server using session tokens
  *  - Real Win32 foreground window detection via Windows user32.dll
  *  - Collects active window, process entropy, and keystroke activity
@@ -23,7 +23,7 @@ const __dirname = path.dirname(__filename);
 
 // Configuration
 const SERVER_URL = process.env.INOVEX_SERVER || 'http://localhost:3001';
-const SPRINT_DURATION_SECONDS = process.env.TEST_FAST_SPRINT ? 15 : 5400; // 90 mins (5400s) default
+const SPRINT_DURATION_SECONDS = process.env.TEST_FAST_SPRINT ? 15 : 1800; // 30 mins (1800s) default
 let authToken = process.env.INOVEX_TOKEN || '';
 
 // Known Employees
@@ -160,7 +160,7 @@ function printHeader() {
   console.log('\x1b[1m\x1b[38;2;95;115;72m   INOVEX TRACKER • STANDALONE DESKTOP AGENT (RBAC HARDENED)\x1b[0m');
   console.log('\x1b[32m========================================================================\x1b[0m');
   console.log(' Connected Host    : ' + SERVER_URL);
-  console.log(' Sprint Policy     : Fixed 90-Minute Checkpoint (Non-Pausable)');
+  console.log(' Sprint Policy     : Fixed 30-Minute Checkpoint (Non-Pausable)');
   console.log(' AI Surveillance   : Win32 Foreground Window & Entropy Detection');
   console.log(' OS Platform       : ' + process.platform + ' (' + process.arch + ')');
   console.log('------------------------------------------------------------------------\n');
@@ -257,16 +257,16 @@ async function main() {
   }
 
   console.log('\n\x1b[33m[!] CRITICAL POLICY NOTICE:\x1b[0m');
-  console.log('When you begin, a fixed 90-MINUTE sprint timer will commence.');
+  console.log('When you begin, a fixed 30-MINUTE sprint timer will commence.');
   console.log('You CANNOT pause or cancel this sprint once initiated.');
   console.log('Screen tracking and Win32 foreground window entropy logging will run in background.');
   console.log('Upon timer completion, recording will be sent to the AI Agent for audit.\n');
 
   const isAuto = process.argv.includes('--auto') || process.argv.includes('--yes') || process.env.AUTO_START === '1';
   if (!isAuto) {
-    await promptQuestion('Press [ENTER] to lock in and begin your 90-minute sprint...');
+    await promptQuestion('Press [ENTER] to lock in and begin your 30-minute sprint...');
   } else {
-    console.log('[AUTO-START] Policy confirmed. Initializing 90-minute sprint...');
+    console.log('[AUTO-START] Policy confirmed. Initializing 30-minute sprint...');
   }
 
   // 4. Notify server: Start Sprint
@@ -281,7 +281,7 @@ async function main() {
 
   console.clear();
   console.log('\x1b[32m========================================================================\x1b[0m');
-  console.log(`\x1b[1m  90-MINUTE SPRINT IN PROGRESS • [${selectedUser.name.toUpperCase()}]\x1b[0m`);
+  console.log(`\x1b[1m  30-MINUTE SPRINT IN PROGRESS • [${selectedUser.name.toUpperCase()}]\x1b[0m`);
   console.log('\x1b[32m========================================================================\x1b[0m');
   console.log(' Sprint Status : \x1b[32mACTIVE & RECORDING\x1b[0m');
   console.log(' Task Directive: ' + activeTask.title);
@@ -343,7 +343,7 @@ async function main() {
 // Finalize Session: Upload Video Recording to AI Agent
 async function finishSprintSession(selectedUser, activeTask) {
   console.log('\n\n------------------------------------------------------------------------');
-  console.log('\x1b[32m✔ 90-MINUTE SPRINT COMPLETED!\x1b[0m');
+  console.log('\x1b[32m✔ 30-MINUTE SPRINT COMPLETED!\x1b[0m');
   console.log('Packaging desktop screen recording artifacts for AI Agent review...');
 
   const recordingsDir = path.join(__dirname, 'recordings');
