@@ -195,7 +195,14 @@ export async function uploadRecordingToSupabase(videoBlob, metadata) {
       created_at: now
     };
 
-    await supabase.from('sprint_audits').insert([auditRecord]).catch(() => {});
+    // Supabase's query builder is a thenable, not a Promise — it has no .catch().
+    // Await it and swallow any insert error via try/catch instead.
+    try {
+      const { error: insertError } = await supabase.from('sprint_audits').insert([auditRecord]);
+      if (insertError) console.warn('[Supabase audit insert warning]', insertError.message);
+    } catch (e) {
+      console.warn('[Supabase audit insert failed]', e?.message);
+    }
     await broadcastTelemetryEvent('AUDIT_COMPLETED', { audit: auditRecord });
     return { success: true, audit: auditRecord };
   }
