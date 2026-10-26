@@ -44,8 +44,10 @@ import { FounderEmployeeView } from './FounderEmployeeView';
 
 // Screen recordings must fit the server's 100MB upload cap for a full 90-minute sprint:
 // 120 kbps * 5400 s ≈ 81MB. Screen content compresses well at a low frame rate.
-const SPRINT_TOTAL_SECONDS = 5400; // 90-minute sprint
-const MIN_REPORT_SECONDS = 600;    // generate an audit only if >= 10 minutes elapsed
+// ⚠️ TEST MODE: sprint shortened to 1 minute. For production 90-minute sprints,
+// set SPRINT_TOTAL_SECONDS back to 5400 and MIN_REPORT_SECONDS back to 600.
+const SPRINT_TOTAL_SECONDS = 60;   // TEST: was 5400 (90 min)
+const MIN_REPORT_SECONDS = 10;     // TEST: was 600 (10 min min before a report)
 const RECORDING_BITRATE = 120000;
 // Must fit the server's 100MB upload cap for a full 90-min sprint:
 // 130 kbps * 5400 s / 8 ≈ 88MB. At maxDimension 1280 / 10 fps this is adequate
@@ -97,7 +99,7 @@ export function EmployeeWorkspace({
   const [loading, setLoading] = useState(true);
 
   // Fixed 90-min Timer State (5400 seconds fixed)
-  const [secondsRemaining, setSecondsRemaining] = useState(5400);
+  const [secondsRemaining, setSecondsRemaining] = useState(SPRINT_TOTAL_SECONDS);
   const [isTimerRunning, setIsTimerRunning] = useState(false);
   const [isTimerExpired, setIsTimerExpired] = useState(false);
   const targetEndTimeRef = useRef(null);
@@ -215,7 +217,7 @@ export function EmployeeWorkspace({
 
           // If sprint was started and status is active
           if (task.sprint_started_at && task.status === 'active' && task.session_terminated !== 1) {
-            targetEndTimeRef.current = task.sprint_started_at + 5400 * 1000;
+            targetEndTimeRef.current = task.sprint_started_at + SPRINT_TOTAL_SECONDS * 1000;
             const remaining = Math.max(0, Math.round((targetEndTimeRef.current - Date.now()) / 1000));
             setSecondsRemaining(remaining);
 
@@ -499,8 +501,8 @@ export function EmployeeWorkspace({
       const currentTaskId = workspaceData?.task?.id || null;
       const data = await startSprintSession(currentTaskId, currentUser.id);
       if (data && data.success) {
-        targetEndTimeRef.current = Date.now() + 5400 * 1000;
-        setSecondsRemaining(5400);
+        targetEndTimeRef.current = Date.now() + SPRINT_TOTAL_SECONDS * 1000;
+        setSecondsRemaining(SPRINT_TOTAL_SECONDS);
         setIsTimerRunning(true);
         setIsTimerExpired(false);
         setWarningCount(0);
@@ -934,7 +936,7 @@ export function EmployeeWorkspace({
                 setIsTerminated(false);
                 setWarningCount(0);
                 setWarningMessage(null);
-                setSecondsRemaining(5400);
+                setSecondsRemaining(SPRINT_TOTAL_SECONDS);
               }}
             >
               Dismiss Alert & Resume
