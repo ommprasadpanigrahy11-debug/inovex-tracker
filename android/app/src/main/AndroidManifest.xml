@@ -47,4 +47,6 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <!-- Required on Android 13+ to display the ongoing "recording active" notification -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 </manifest>
