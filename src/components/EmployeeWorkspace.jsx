@@ -34,11 +34,21 @@ import {
   getAuthHeaders
 } from '../lib/dataService';
 import { uploadRecordingToSupabase } from '../lib/supabase';
+import {
+  isNativeScreenRecordingAvailable,
+  startNativeScreenRecording,
+  stopNativeScreenRecording,
+  isNativePlatform
+} from '../lib/nativeScreenRecorder';
 import { FounderEmployeeView } from './FounderEmployeeView';
 
 // Screen recordings must fit the server's 100MB upload cap for a full 90-minute sprint:
 // 120 kbps * 5400 s ≈ 81MB. Screen content compresses well at a low frame rate.
 const RECORDING_BITRATE = 120000;
+// Must fit the server's 100MB upload cap for a full 90-min sprint:
+// 130 kbps * 5400 s / 8 ≈ 88MB. At maxDimension 1280 / 10 fps this is adequate
+// for H.264 monitoring footage.
+const RECORDING_BITRATE_NATIVE = 130000;
 const CAPTURE_FRAME_RATE = { ideal: 10, max: 15 };
 const RECORDING_MIME_CANDIDATES = [
   'video/webm;codecs=vp9',
@@ -103,6 +113,10 @@ export function EmployeeWorkspace({
   // Activity-only monitoring: used on phones / browsers without screen capture
   const [isActivityMode, setIsActivityMode] = useState(false);
   const recordingMimeRef = useRef('video/webm');
+  // True while the native Android MediaProjection recorder is capturing
+  const [isNativeRecording, setIsNativeRecording] = useState(false);
+  const [nativeRecordingAvailable, setNativeRecordingAvailable] = useState(false);
+  const isNativeRecordingRef = useRef(false);
   const isScreenTrackingRef = useRef(false);
   const isDemoSimulationRef = useRef(false);
   const drawIntervalRef = useRef(null);
@@ -119,6 +133,15 @@ export function EmployeeWorkspace({
   useEffect(() => {
     isScreenTrackingRef.current = isScreenTracking;
   }, [isScreenTracking]);
+
+  // Detect native Android screen recording support once on mount
+  useEffect(() => {
+    let active = true;
+    isNativeScreenRecordingAvailable().then((ok) => {
+      if (active) setNativeRecordingAvailable(ok);
+    });
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     isDemoSimulationRef.current = isDemoSimulation;
@@ -349,17 +372,16 @@ export function EmployeeWorkspace({
     }
   };
 
-  // Upload finalized sprint video to backend for AI Agent Anomaly Audit
-  const uploadRecordedVideo = async () => {
-    if (recordedChunksRef.current.length === 0) {
-      console.warn('Sprint finished with no recorded video chunks; skipping empty upload.');
+  // Upload a finalized sprint video blob to the backend for the AI anomaly audit
+  const uploadSprintVideo = async (videoBlob, { native = false } = {}) => {
+    if (!videoBlob || videoBlob.size === 0) {
+      console.warn('Sprint finished with no recorded video; skipping empty upload.');
       return;
     }
 
     setIsUploadingRecording(true);
     try {
-      const videoBlob = new Blob(recordedChunksRef.current, { type: recordingMimeRef.current });
-      const isMobile = isMobileDevice();
+      const isMobile = native || isMobileDevice();
       const res = await uploadRecordingToSupabase(videoBlob, {
         userId: currentUser.id,
         employeeName: currentUser.name,
@@ -381,6 +403,30 @@ export function EmployeeWorkspace({
     }
   };
 
+  // Web MediaRecorder path: assemble chunks into a blob and upload
+  const uploadRecordedVideo = async () => {
+    if (recordedChunksRef.current.length === 0) {
+      console.warn('Sprint finished with no recorded video chunks; skipping empty upload.');
+      return;
+    }
+    const videoBlob = new Blob(recordedChunksRef.current, { type: recordingMimeRef.current });
+    recordedChunksRef.current = [];
+    await uploadSprintVideo(videoBlob);
+  };
+
+  // Native Android path: pull the finished MP4 from the plugin and upload it
+  const finalizeNativeRecording = async () => {
+    if (!isNativeRecordingRef.current) return;
+    isNativeRecordingRef.current = false;
+    try {
+      const { blob } = await stopNativeScreenRecording();
+      await uploadSprintVideo(blob, { native: true });
+    } catch (e) {
+      console.error('Native recording finalize failed', e);
+      setScreenCaptureError(`Sprint recording failed: ${e.message || 'could not save recording'}`);
+    }
+  };
+
   // Handle 90-Minute Timer Completion
   const handleTimerComplete = async () => {
     setIsTimerRunning(false);
@@ -389,6 +435,10 @@ export function EmployeeWorkspace({
 
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop();
+    }
+    if (isNativeRecordingRef.current) {
+      setIsNativeRecording(false);
+      await finalizeNativeRecording();
     }
 
     if (wakeLockRef.current) {
@@ -448,6 +498,31 @@ export function EmployeeWorkspace({
     setScreenCaptureError(null);
 
     if (!forceDemoMode) {
+      // Native Android app: use the MediaProjection recorder (real screen video),
+      // which getDisplayMedia cannot provide inside the WebView.
+      if (isNativePlatform() && await isNativeScreenRecordingAvailable()) {
+        try {
+          await startNativeScreenRecording({
+            bitrate: RECORDING_BITRATE_NATIVE,
+            fps: CAPTURE_FRAME_RATE.ideal,
+            maxDimension: 1280
+          });
+          setIsDemoSimulation(false);
+          isDemoSimulationRef.current = false;
+          setIsActivityMode(false);
+          isNativeRecordingRef.current = true;
+          setIsNativeRecording(true);
+          isScreenTrackingRef.current = true;
+          setIsScreenTracking(true);
+          setActiveWindow('Android screen (recording)');
+          return null;
+        } catch (err) {
+          console.warn('Native screen recording declined/failed:', err);
+          setScreenCaptureError(`Screen recording permission was not granted: ${err?.message || 'denied'}. Retry, or Demo Mode.`);
+          return null;
+        }
+      }
+
       // Phones and browsers without getDisplayMedia: fall back to activity monitoring
       // (heartbeats + app foreground/background tracking) instead of failing outright
       if (!supportsScreenCapture()) {
@@ -594,6 +669,10 @@ export function EmployeeWorkspace({
 
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
         mediaRecorderRef.current.stop();
+      }
+      if (isNativeRecordingRef.current) {
+        setIsNativeRecording(false);
+        finalizeNativeRecording();
       }
     } else {
       startScreenCapture(false);
@@ -1144,7 +1223,7 @@ export function EmployeeWorkspace({
                   color: isDemoSimulation ? '#D97706' : undefined
                 }}>
                   <span className="badge-dot" style={{ background: isDemoSimulation ? '#D97706' : isScreenTracking ? 'var(--status-green)' : 'var(--muted)' }}></span>
-                  {isScreenTracking ? (isDemoSimulation ? 'Demo Simulation' : isActivityMode ? 'Activity Monitor' : 'Rec • Live') : 'Tracking Off'}
+                  {isScreenTracking ? (isDemoSimulation ? 'Demo Simulation' : isActivityMode ? 'Activity Monitor' : isNativeRecording ? 'Rec • Device' : 'Rec • Live') : 'Tracking Off'}
                 </span>
               </div>
             </div>
@@ -1249,6 +1328,14 @@ export function EmployeeWorkspace({
                       backfaceVisibility: 'hidden'
                     }}
                   />
+                ) : isNativeRecording ? (
+                  <div style={{ width: '100%', height: '100%', padding: '14px 16px 36px', background: '#090d14', display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: '8px', boxSizing: 'border-box', textAlign: 'center' }}>
+                    <Monitor size={22} style={{ color: 'var(--status-green)', margin: '0 auto' }} />
+                    <div className="mono" style={{ fontSize: '12px', color: '#EDF1E3' }}>Recording device screen</div>
+                    <div className="mono" style={{ fontSize: '11px', color: '#94a3b8', maxWidth: '360px', margin: '0 auto', lineHeight: 1.5 }}>
+                      Your Android screen is being recorded for this sprint. Android shows a recording indicator in the status bar. The video uploads for the AI audit when the sprint ends. (No live preview inside the app.)
+                    </div>
+                  </div>
                 ) : isActivityMode ? (
                   <div style={{ width: '100%', height: '100%', padding: '14px 16px 36px', background: '#090d14', display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: '8px', boxSizing: 'border-box', textAlign: 'center' }}>
                     <Activity size={22} style={{ color: '#7dd3fc', margin: '0 auto' }} />
@@ -1285,8 +1372,8 @@ export function EmployeeWorkspace({
                   <Eye size={24} style={{ margin: '0 auto 8px', opacity: 0.5 }} />
                   <div style={{ fontSize: '13px', fontWeight: '500', color: 'var(--ink)' }}>0ms Delay Screen Sentinel Disarmed</div>
                   <div className="mono" style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '4px', maxWidth: '320px', margin: '4px auto 12px' }}>
-                    {supportsScreenCapture()
-                      ? 'Shares and records your screen during the sprint for the AI audit.'
+                    {(supportsScreenCapture() || nativeRecordingAvailable)
+                      ? 'Records your screen during the sprint for the AI audit. You approve the capture when it starts.'
                       : "Screen video isn't available on this device. Activity monitoring will be used instead."}
                   </div>
                   <button
@@ -1318,7 +1405,7 @@ export function EmployeeWorkspace({
                   border: '1px solid rgba(255, 255, 255, 0.1)'
                 }}>
                   <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: isDemoSimulation ? '#D97706' : isActivityMode ? '#7dd3fc' : 'var(--status-green)' }}></span>
-                  <span>{isDemoSimulation ? 'DEMO SIMULATION • NOT PRODUCTION EVIDENCE' : isActivityMode ? 'ACTIVITY MONITOR • NO SCREEN VIDEO ON THIS DEVICE' : 'RECORDING SCREEN • LIVE'}</span>
+                  <span>{isDemoSimulation ? 'DEMO SIMULATION • NOT PRODUCTION EVIDENCE' : isActivityMode ? 'ACTIVITY MONITOR • NO SCREEN VIDEO ON THIS DEVICE' : isNativeRecording ? 'RECORDING DEVICE SCREEN' : 'RECORDING SCREEN • LIVE'}</span>
                 </div>
               )}
             </div>
