@@ -114,7 +114,9 @@ export async function uploadRecordingToSupabase(videoBlob, metadata) {
   const now = Date.now();
   const durationSec = metadata.durationSeconds || 5400;
   const token = localStorage.getItem('inovex_auth_token') || '';
-  const filename = `sprint_${metadata.userId}_${now}.webm`;
+  const contentType = (videoBlob.type || 'video/webm').split(';')[0];
+  const ext = contentType === 'video/mp4' ? 'mp4' : 'webm';
+  const filename = `sprint_${metadata.userId}_${now}.${ext}`;
 
   const formData = new FormData();
   formData.append('video', videoBlob, filename);
@@ -162,7 +164,7 @@ export async function uploadRecordingToSupabase(videoBlob, metadata) {
     const { data: uploadData, error: uploadError } = await supabase.storage
       .from('sprint-recordings')
       .upload(`${metadata.userId}/${filename}`, videoBlob, {
-        contentType: 'video/webm',
+        contentType,
         upsert: true
       });
 

@@ -1349,6 +1349,8 @@ export async function sendTelemetryBeat(userId, taskId, activeWindow, keystrokeR
   try {
     const res = await fetch(getApiUrl('/api/telemetry/log'), {
       method: 'POST',
+      // keepalive lets the beat finish even if the page is being backgrounded (mobile)
+      keepalive: true,
       headers: getAuthHeaders(),
       body: JSON.stringify({
         taskId,
